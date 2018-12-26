@@ -3,35 +3,76 @@ window.SSPS = function () {
 	this.vpw = window.innerWidth;
 	this.vph = window.innerHeight;
 
-	this.camera = new THREE.PerspectiveCamera( 100, this.vpw / this.vph, 5, 3500 );
+	this.camera = new THREE.PerspectiveCamera(120, this.vpw / this.vph, 0.1, 3500);
+	this.camera.position.z = 10;
+	this.camera.lookAt(0, 0, 0);
+	this.camera.updateProjectionMatrix();
 
 	this.scene = new THREE.Scene();
 	this.scene.background = new THREE.Color( 0x000000 );
 
-	this.renderer = new THREE.WebGLRenderer();
+	this.light = new THREE.PointLight( 0xffffff, 1, 1000 );
+	this.light.position.set( 100, 100, 100 );
+	this.scene.add( this.light );
+
+	this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
 	this.renderer.setPixelRatio( window.devicePixelRatio );
 	this.renderer.setSize( this.vpw, this.vph );
+	document.body.appendChild(this.renderer.domElement);
 
+	this.running = false;
+	this.time = 0;
+
+	this.psim = new xSSPS(this.scene);
+	this.gp = new THREE.Vector3(0, 0, 0);
+
+	for (let i=0; i<1000; i++) {
+		this.psim.add();
+	}
 };
 
 SSPS.prototype.updateRender = function(dt) {
 
 	document.title = 'SSPS - ' + Math.floor(1 / dt) + ' fps';
 
+	const grav = this.psim.updateRender(dt);
+
+	this.gp.x += (grav[0].p.x - this.gp.x) * dt * 2;
+	this.gp.y += (grav[0].p.y - this.gp.y) * dt * 2;
+	this.gp.z += (grav[0].p.z - this.gp.z) * dt * 2;
+
+	const ra = this.time/16 * Math.PI * 2;
+	const rr = 12.5;
+	this.camera.position.y = this.gp.y;
+	this.camera.position.z = this.gp.z + Math.cos(ra) * rr;
+	this.camera.position.x = this.gp.x + Math.sin(ra) * rr;
+	this.camera.lookAt(this.gp.x, this.gp.y, this.gp.z);
+	this.camera.updateProjectionMatrix();
+
 };
 
 SSPS.prototype.start = function () {
 
 	let lTime = Date.timeStamp();
+	let lDt = 1/60;
+	this.running = true;
+	this.time = 0;
 
 	const tick = () => {
+
+		if (!this.running) {
+			return;
+		}
 
 		this.updateViewport();
 		this.renderer.render( this.scene, this.camera );
 
 		const cTime = Date.timeStamp();
-		const dt = cTime - lTime;
+		const dt = (cTime - lTime) * 0.5 + lDt * 0.5;
+		lDt = dt;
 		lTime = cTime;
+
+		this.time += dt;
 
 		this.updateRender(dt);
 
@@ -43,14 +84,22 @@ SSPS.prototype.start = function () {
 
 };
 
+SSPS.prototype.stop = function () {
+
+	this.running = false;
+
+	document.title = 'SSPS - Stopped';
+
+};
+
 SSPS.prototype.updateViewport = function() {
 
 	if (this.vpw !== window.innerWidth || this.vph !== window.innerHeight) {
 		this.vpw = window.innerWidth;
 		this.vph = window.innerHeight;
-		camera.aspect = this.vpw / this.vph;
-		camera.updateProjectionMatrix();
-		renderer.setSize( this.vpw, this.vph );
+		this.camera.aspect = this.vpw / this.vph;
+		this.camera.updateProjectionMatrix();
+		this.renderer.setSize( this.vpw, this.vph );
 	}
 
 }
