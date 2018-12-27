@@ -8,6 +8,24 @@
 		<script type="text/javascript" src="/scripts/main.js"></script>
 	</head>
 	<body>
+		<script type="text/vertex-shader" id="vertexShader1">
+			varying vec2 vUv;
+
+			void main() {
+				gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+				vUv = uv;
+			}
+		</script>
+		<script type="text/fragment-shader" id="fragmentShader1">
+			uniform vec4 color;
+			varying vec2 vUv;
+
+			void main() {
+				float t = 1. - length(vUv - vec2(0.5, 0.5)) * 2.;
+				gl_FragColor.rgb = mix(color.rgb, clamp(color.rgb * 10., 0., 1.), t)  * pow(t, 0.5);
+				gl_FragColor.a = color.a * pow(t, 0.6);
+			}
+		</script>
 		<script type="text/javascript">
 			const inst = new SSPS();
 			inst.start();

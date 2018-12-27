@@ -23,10 +23,10 @@ window.SSPS = function () {
 	this.running = false;
 	this.time = 0;
 
-	this.psim = new xSSPS(this.scene);
+	this.psim = new xSSPS(this.scene, this.camera);
 	this.gp = new THREE.Vector3(0, 0, 0);
 
-	for (let i=0; i<1000; i++) {
+	for (let i=0; i<2000; i++) {
 		this.psim.add();
 	}
 };
@@ -42,12 +42,19 @@ SSPS.prototype.updateRender = function(dt) {
 	this.gp.z += (grav[0].p.z - this.gp.z) * dt * 2;
 
 	const ra = this.time/16 * Math.PI * 2;
-	const rr = 12.5;
-	this.camera.position.y = this.gp.y;
-	this.camera.position.z = this.gp.z + Math.cos(ra) * rr;
-	this.camera.position.x = this.gp.x + Math.sin(ra) * rr;
+	const ra2 = this.time/24 * Math.PI * 2;
+	const rr = 10;
+	this.camera.position.y = this.gp.y + Math.sin(ra2) * rr;
+	this.camera.position.z = this.gp.z + Math.cos(ra) * Math.cos(ra2) * rr;
+	this.camera.position.x = this.gp.x + Math.sin(ra) * Math.cos(ra2) * rr;
 	this.camera.lookAt(this.gp.x, this.gp.y, this.gp.z);
 	this.camera.updateProjectionMatrix();
+
+	this.camera.up.y = this.gp.y;
+	this.camera.up.z = this.gp.z + Math.cos(ra + Math.PI / 2) * rr;
+	this.camera.up.x = this.gp.x + Math.sin(ra + Math.PI / 2) * rr;
+
+	this.light.position.set(this.gp.x, this.gp.y, this.gp.z);
 
 };
 
@@ -68,7 +75,7 @@ SSPS.prototype.start = function () {
 		this.renderer.render( this.scene, this.camera );
 
 		const cTime = Date.timeStamp();
-		const dt = (cTime - lTime) * 0.5 + lDt * 0.5;
+		const dt = Math.max(Math.min(cTime - lTime, 1/24), 1/60) * 0.5 + lDt * 0.5;
 		lDt = dt;
 		lTime = cTime;
 
