@@ -43,7 +43,7 @@ SSPS.prototype.updateRender = function(dt) {
 
 	const ra = this.time/16 * Math.PI * 2;
 	const ra2 = this.time/24 * Math.PI * 2;
-	const rr = 10;
+	const rr = 5;
 	this.camera.position.y = this.gp.y + Math.sin(ra2) * rr;
 	this.camera.position.z = this.gp.z + Math.cos(ra) * Math.cos(ra2) * rr;
 	this.camera.position.x = this.gp.x + Math.sin(ra) * Math.cos(ra2) * rr;
