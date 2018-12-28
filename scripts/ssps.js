@@ -5,7 +5,8 @@ window.xSSPS = function(scene, camera) {
 	this.pgeom = new THREE.PlaneBufferGeometry(3, 3, 1, 1);
 	this.hSize = 1.0;
 	this.fLen = this.hSize;
-	this.mhSize = 2.5;
+	this.mhSize = 64;
+	this.mhMinSize = 1;
 	this.restMass = 20;
 	this.nGravity = 15;
 	this.gConst = 0.005;
@@ -43,15 +44,13 @@ xSSPS.prototype.updateRender = function(dt) {
   		return ((ix * 10223) + (iy * 12919) + (iz * 16127)) % 1e6;
 	};
 
-	const mHash3D = (x, y, z) => {
-		const ix = (Math.floor(x/this.mhSize)) + 1e5,
-    	  	  iy = (Math.floor(y/this.mhSize)) + 1e5,
-    	  	  iz = (Math.floor(z/this.mhSize)) + 1e5;
-  		return ((ix * 10223) + (iy * 12919) + (iz * 16127)) % 1e6;
+	const mHash3D = (x, y, z, isz) => {
+		const sz = isz || this.mhSize;
+		const ix = (Math.floor(x/sz)) + 1e5,
+    	  	  iy = (Math.floor(y/sz)) + 1e5,
+    	  	  iz = (Math.floor(z/sz)) + 1e5;
+  		return (((ix * 10223) + (iy * 12919) + (iz * 16127)) % 1e6) + Math.floor(isz * 1e6);
 	};
-
-	const hash = new Map();
-	const mhash = new Map();
 
 	const tkeys = [ 'lr', 'ldamp', 'gscale', 'opacity', 'incompress' ];
 
@@ -119,6 +118,12 @@ xSSPS.prototype.updateRender = function(dt) {
 	}
 
 	// update position & angle, mark in hash
+	const hash = new Map();
+	const mhash = new Map();
+	const mhlevel = new Map();
+	const mhchild = new Map();
+	const mhroot = new Map();
+
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
 		if (!P.sphForce) {
@@ -135,7 +140,6 @@ xSSPS.prototype.updateRender = function(dt) {
 		P.ang.y += P.avel.y * dt;
 		P.ang.z += P.avel.z * dt;
 		P.hkey = hash3D(P.pos.x, P.pos.y, P.pos.z);
-		P.mhkey = mHash3D(P.pos.x, P.pos.y, P.pos.z);
 
 		// insert into collision hash
 		if (!hash.has(P.hkey)) {
@@ -145,12 +149,46 @@ xSSPS.prototype.updateRender = function(dt) {
 			hash.get(P.hkey).push(P);
 		}
 
-		// insert into gravity hash
-		if (!mhash.has(P.mhkey)) {
-			mhash.set(P.mhkey, [P]);
+		// insert into gravity octree
+		let msz = this.mhSize;
+		const mhkey = mHash3D(P.pos.x, P.pos.y, P.pos.z, msz);
+		let lmhk = mhkey;
+		mhlevel.set(mhkey, 0);
+		if (!mhash.has(mhkey)) {
+			mhash.set(mhkey, [P]);
 		}
 		else {
-			mhash.get(P.mhkey).push(P);
+			mhash.get(mhkey).push(P);
+		}
+		mhroot.set(mhkey, true);
+
+		let level = 1;
+		while ((msz - this.mhMinSize) > (1e-6)) {
+			msz /= 2;
+
+			const nk = mHash3D(P.pos.x, P.pos.y, P.pos.z, msz);
+
+			if (!mhash.has(nk)) {
+				mhash.set(nk, [P]);
+			}
+			else {
+				mhash.get(nk).push(P);
+			}
+
+			if (!mhchild.has(lmhk)) {
+				mhchild.set(lmhk, [nk]);
+			}
+			else {
+				const lst = mhchild.get(lmhk);
+				if (lst.indexOf(nk) < 0) {
+					lst.push(nk);
+				}
+			}
+
+			mhlevel.set(nk, level);
+
+			lmhk = nk;
+			level += 1;
 		}
 
 		// update THREE.js mesh
@@ -174,9 +212,11 @@ xSSPS.prototype.updateRender = function(dt) {
 	// compute gravity hash & heat hash
 	const gravity = [];
 	const heatList = [];
+	const mhgravity = new Map();
 	for (let [hk, list] of mhash) {
 		const gph = new THREE.Vector3(0, 0, 0); 
 		const gp = new THREE.Vector3(0, 0, 0);
+		const level = mhlevel.get(hk) || 0;
 		let tmass = 0.0;
 		let theat = 0.0;
 		for (let i=0; i<list.length; i++) {
@@ -186,29 +226,40 @@ xSSPS.prototype.updateRender = function(dt) {
 			gp.y += P.pos.y * mass;
 			gp.z += P.pos.z * mass;
 			tmass += mass;
-			const heat = Math.pow(P.temp, 0.125);
-			gph.x += P.pos.x * heat;
-			gph.y += P.pos.y * heat;
-			gph.z += P.pos.z * heat;
-			theat += heat;
+			if (level === 4) {
+				const heat = Math.pow(P.temp, 0.125);
+				gph.x += P.pos.x * heat;
+				gph.y += P.pos.y * heat;
+				gph.z += P.pos.z * heat;
+				theat += heat;
+			}
 		}
-		if (tmass > this.minMassGravity) {
+		if (tmass > 0) {
 			gp.x /= tmass;
 			gp.y /= tmass;
 			gp.z /= tmass;
-			gravity.push({
+			mhgravity.set(hk, {
 				p: gp,
-				mass: tmass
+				mass: tmass,
+				count: list.length
 			});
 		}
-		if (theat > this.minHeatLight) {
-			gph.x /= theat;
-			gph.y /= theat;
-			gph.z /= theat;
-			heatList.push({
-				p: gph,
-				heat: theat
-			});
+		if (level === 4) {
+			if (tmass > this.minMassGravity) {
+				gravity.push({
+					p: new THREE.Vector3(gp.x, gp.y, gp.z),
+					mass: tmass
+				});
+			}
+			if (theat > this.minHeatLight) {
+				gph.x /= theat;
+				gph.y /= theat;
+				gph.z /= theat;
+				heatList.push({
+					p: gph,
+					heat: theat
+				});
+			}
 		}
 	}
 	gravity.sort((a, b) => (b.mass - a.mass));
@@ -216,45 +267,56 @@ xSSPS.prototype.updateRender = function(dt) {
 	heatList.sort((a, b) => (b.heat - a.heat));
 	heatList.length = Math.min(heatList.length, this.nHeat);
 
-	let gtmass = gravity.length ? gravity[0].mass : 0;
-	let gtp = gravity.length ? new THREE.Vector3(gravity[0].p.x, gravity[0].p.y, gravity[0].p.z) : new THREE.Vector3(0, 0, 0);
-	for (let i=1; i<gravity.length; i++) {
-		gtp.x = (gtp.x * gtmass + gravity[i].p.x * gravity[i].mass) / (gravity[i].mass + gtmass);
-		gtp.y = (gtp.y * gtmass + gravity[i].p.y * gravity[i].mass) / (gravity[i].mass + gtmass);
-		gtp.z = (gtp.z * gtmass + gravity[i].p.z * gravity[i].mass) / (gravity[i].mass + gtmass);
-		gtmass += gravity[i].mass;
-	}
+	const gravForce = (p, node, ret) => {
+		if (!ret) {
+			ret = new THREE.Vector3(0, 0, 0);
+		}
 
-	if (!this.gtp) {
-		this.gtp = gtp;
-		this.gtmass = gtmass;
-	}
-	else {
-		this.gtp.x += (gtp.x - this.gtp.x) * dt * 10;
-		this.gtp.y += (gtp.y - this.gtp.y) * dt * 10;
-		this.gtp.z += (gtp.z - this.gtp.z) * dt * 10;
-		this.gtmass += (gtmass - this.gtmass) * dt * 6;
-	}
+		if (!node) {
+			for (let [mk, dummy] of mhroot) {
+				const mhi = mhgravity.get(node);
+				if (mhi && mhi.count > 4) {
+					gravForce(p, mk, ret);
+				}
+			}
+			return ret;
+		}
+
+		if (!mhgravity.has(node)) {
+			return;
+		}
+		const mhi = mhgravity.get(node);
+		const level = mhlevel.get(node) || 0;
+		const lsz = this.mhSize / Math.pow(2, level);
+
+		const dx = mhi.p.x - p.x,
+			  dy = mhi.p.y - p.y,
+			  dz = mhi.p.z - p.z;
+		const dlenSq = (dx*dx + dy*dy + dz*dz);
+
+		const vsz = (lsz * lsz) / dlenSq;
+
+		if (vsz < 4) {
+			if (dlenSq > 0.01) {
+				const dlen1 = Math.sqrt(dlenSq);
+				const dlen2 = mhi.mass / (Math.max(dlenSq, 20) * 0.1);
+				ret.x += dlen2 * (dx / dlen1) * dt * this.gConst;
+				ret.y += dlen2 * (dy / dlen1) * dt * this.gConst;
+				ret.z += dlen2 * (dz / dlen1) * dt * this.gConst;
+			}
+		}
+		else if (mhchild.has(node)) {
+			const lst = mhchild.get(node);
+			for (let i=0; i<lst.length; i++) {
+				gravForce(p, lst[i], ret);
+			}
+		}
+	};
 
 	// update velocities with gravity
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
-		P.gpressure = 0;
-		for (let j=0; j<gravity.length; j++) {
-			const G = gravity[j];
-			const dx = G.p.x - P.pos.x,
-				  dy = G.p.y - P.pos.y,
-				  dz = G.p.z - P.pos.z;
-			const dlenSq = (dx*dx + dy*dy + dz*dz);
-			if (dlenSq > 0.01) {
-				const dlen1 = Math.sqrt(dlenSq);
-				const dlen2 = G.mass / (Math.max(dlenSq, 20) * 0.1);
-				P.gpressure += dlen2;
-				P.vel.x += dlen2 * (dx / dlen1) * dt * this.gConst;
-				P.vel.y += dlen2 * (dy / dlen1) * dt * this.gConst;
-				P.vel.z += dlen2 * (dz / dlen1) * dt * this.gConst;
-			}
-		}
+		gravForce(P.pos, null, P.vel);
 	}
 
 	// SPH - Calculate pressures
@@ -357,7 +419,7 @@ xSSPS.prototype.updateRender = function(dt) {
 
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
-		
+
 		for (let j=0; j<heatList.length; j++) {
 			const H = heatList[j];
 			const dx = H.p.x - P.pos.x,
@@ -381,7 +443,7 @@ xSSPS.prototype.updateRender = function(dt) {
 		}
 	}
 
-	return {grav: [{p: this.gtp, mass: this.gtmass}], hl: heatList};
+	return {grav: gravity, hl: heatList};
 
 };
 
@@ -390,24 +452,27 @@ xSSPS.prototype.add = function(inArgs) {
 	const args = inArgs || {};
 
 	const rat = Math.PI * Math._random(), rap = Math.PI * 2.0 * Math._random();
-	const rr = Math._random() * 100;
+	const maxrr = 50;
+	const rr = Math.pow(Math._random(), 1.5) * maxrr;
 	const id = 1e9 + Math.floor(Math._random() * 1e9);
 	const pos = args.pos ? args.pos : new THREE.Vector3(Math.cos(rat) * Math.sin(rap) * rr, Math.sin(rat) * Math.sin(rap) * rr, Math.cos(rap) * rr);
 
+	const stypes = [...this.types];
+	stypes.sort((a, b) => (b.randWeight - a.randWeight));
 	let type = args.type || null;
 	if (!type) {
 		let tRandWeight = 0;
-		for (let i=0; i<this.types.length; i++) {
-			tRandWeight += this.types[i].randWeight;
+		for (let i=0; i<stypes.length; i++) {
+			tRandWeight += stypes[i].randWeight;
 		}
-		const rand = Math._random() * tRandWeight;
+		const rand = (rr / maxrr) * tRandWeight;
 		tRandWeight = 0;
-		for (let i=0; i<this.types.length; i++) {
-			if ((rand >= tRandWeight && rand < (tRandWeight + this.types[i].randWeight)) || (i===(this.types.length-1))) {
-				type = this.types[i];
+		for (let i=0; i<stypes.length; i++) {
+			if ((rand >= tRandWeight && rand < (tRandWeight + stypes[i].randWeight)) || (i===(stypes.length-1))) {
+				type = stypes[i];
 				break;
 			}
-			tRandWeight += this.types[i].randWeight;
+			tRandWeight += stypes[i].randWeight;
 		}
 	}
 	type = {...type, ...(type.__fn())};
@@ -427,13 +492,15 @@ xSSPS.prototype.add = function(inArgs) {
 		meshList.push(mesh);
 	}
 
+	const iv = 1.5;
+
 	const obj = {
 		id: id,
 		group: null,
 		pos: pos,
 		ang: ang,
 		temp: 0,//temp,
-		vel: args.vel || new THREE.Vector3(Math._random()*1-0.5, Math._random()*1-0.5, Math._random()*1-0.5),
+		vel: args.vel || new THREE.Vector3(Math._random()*iv-(iv*0.5), Math._random()*iv-(iv*0.5), Math._random()*iv-(iv*0.5)),
 		avel: args.avel || new THREE.Vector3(0, 0, 0),
 		mass: type.mass,
 		mesh: meshList,
@@ -456,7 +523,7 @@ xSSPS.prototype.seedTypes = function() {
 	this.types.push({
 		name: 'Hydrogen', id: 1,
 		mass: 1.5,
-		randWeight: 100,
+		randWeight: 10,
 		heatPerPressure: 1,
 		heatDamp: 0.9,
 		__fn: () => (this.makeMaterial({
@@ -492,9 +559,9 @@ xSSPS.prototype.seedTypes = function() {
 	this.types.push({
 		name: 'Iron', id: 2,
 		mass: 5.0,
-		randWeight: 2,
+		randWeight: 0.1,
 		heatPerPressure: 10,
-		heatDamp: 0.1,
+		heatDamp: 0.4,
 		__fn: () => (this.makeMaterial({
 			ttemp1: 550,
 			ttemp2: 600,
@@ -643,7 +710,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 		});
 		ret.depthTest = true;
 		ret.depthWrite = false;
-		ret.blending = THREE.AdditiveBlending;
+		//ret.blending = THREE.AdditiveBlending;
 		ret.needsUpdate = true;
 		return ret;
 	};

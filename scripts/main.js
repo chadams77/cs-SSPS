@@ -33,6 +33,8 @@ window.SSPS = function () {
 	for (let i=0; i<2000; i++) {
 		this.psim.add();
 	}
+
+	this.gindex = 0;
 };
 
 SSPS.prototype.updateRender = function(dt) {
@@ -41,22 +43,26 @@ SSPS.prototype.updateRender = function(dt) {
 
 	const {grav, hl} = this.psim.updateRender(dt);
 
-	this.gp.x += (grav[0].p.x - this.gp.x) * dt * 2;
-	this.gp.y += (grav[0].p.y - this.gp.y) * dt * 2;
-	this.gp.z += (grav[0].p.z - this.gp.z) * dt * 2;
+	if (grav.length > 0) {
+		const G = grav[this.gindex % grav.length];
 
-	const ra = this.time/16 * Math.PI * 2;
-	const ra2 = this.time/24 * Math.PI * 2;
-	const rr = 5;
-	this.camera.position.y = this.gp.y + Math.sin(ra2) * rr;
-	this.camera.position.z = this.gp.z + Math.cos(ra) * Math.cos(ra2) * rr;
-	this.camera.position.x = this.gp.x + Math.sin(ra) * Math.cos(ra2) * rr;
-	this.camera.lookAt(this.gp.x, this.gp.y, this.gp.z);
-	this.camera.updateProjectionMatrix();
+		this.gp.x += (G.p.x - this.gp.x) * dt * 2;
+		this.gp.y += (G.p.y - this.gp.y) * dt * 2;
+		this.gp.z += (G.p.z - this.gp.z) * dt * 2;
 
-	this.camera.up.y = this.gp.y;
-	this.camera.up.z = this.gp.z + Math.cos(ra + Math.PI / 2) * rr;
-	this.camera.up.x = this.gp.x + Math.sin(ra + Math.PI / 2) * rr;
+		const ra = this.time/16 * Math.PI * 2;
+		const ra2 = this.time/24 * Math.PI * 2;
+		const rr = 5;
+		this.camera.position.y = this.gp.y + Math.sin(ra2) * rr;
+		this.camera.position.z = this.gp.z + Math.cos(ra) * Math.cos(ra2) * rr;
+		this.camera.position.x = this.gp.x + Math.sin(ra) * Math.cos(ra2) * rr;
+		this.camera.lookAt(this.gp.x, this.gp.y, this.gp.z);
+		this.camera.updateProjectionMatrix();
+
+		this.camera.up.y = this.gp.y;
+		this.camera.up.z = this.gp.z + Math.cos(ra + Math.PI / 2) * rr;
+		this.camera.up.x = this.gp.x + Math.sin(ra + Math.PI / 2) * rr;
+	}
 
 	for (let i=0; hl && i<hl.length; i++) {
 		this.light[i].position.set(hl[i].p.x, hl[i].p.y, hl[i].p.z);
@@ -75,6 +81,10 @@ SSPS.prototype.start = function () {
 	let lDt = 1/60;
 	this.running = true;
 	this.time = 0;
+
+	document.body.addEventListener('click', (e) => {
+		this.gindex += 1;
+	});
 
 	const tick = () => {
 
