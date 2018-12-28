@@ -220,9 +220,9 @@ xSSPS.prototype.updateRender = function(dt) {
 		const fieldVel = new THREE.Vector3(0, 0, 0);
 		let fieldWeight = 0;
 
-		for (ix=-2; ix<=2; ix++) {
-			for (iy=-2; iy<=2; iy++) {
-				for (iz=-2; iz<=2; iz++) {
+		for (ix=-1; ix<=1; ix++) {
+			for (iy=-1; iy<=1; iy++) {
+				for (iz=-1; iz<=1; iz++) {
 					const ihk = hash3D(
 						P.pos.x + ix * this.hSize,
 						P.pos.y + iy * this.hSize,
@@ -239,10 +239,10 @@ xSSPS.prototype.updateRender = function(dt) {
 								const sdist = sphereDist(
 									P.pos.x, P.pos.y, P.pos.z,
 									jP.pos.x, jP.pos.y, jP.pos.z,
-									this.hSize * 2, jP.lr
+									P.lr, jP.lr
 								);
 								if (sdist < 0) {
-									const tweight = jP.mass * Math.pow(1 - Math.max(-sdist / (this.hSize * 2), 1), 0.5);
+									const tweight = jP.mass * Math.pow(1 - Math.max(-sdist / (P.lr), 1), 0.5);
 									fieldWeight += tweight;
 									fieldVel.x += jP.vel.x * tweight;
 									fieldVel.y += jP.vel.y * tweight;
@@ -323,9 +323,10 @@ xSSPS.prototype.updateRender = function(dt) {
 
 		// Apply field force
 		if (fieldWeight > 0) {
-			P.vel.x += ((P.vel.x * P.incompress + (fieldVel.x / fieldWeight) * (1 - P.incompress)) - P.vel.x) * dt * 8;
-			P.vel.y += ((P.vel.y * P.incompress + (fieldVel.y / fieldWeight) * (1 - P.incompress)) - P.vel.y) * dt * 8;
-			P.vel.z += ((P.vel.z * P.incompress + (fieldVel.z / fieldWeight) * (1 - P.incompress)) - P.vel.z) * dt * 8;
+			const damp = 1 - (Math.pow(P.ldamp, dt) * (1 - P.incompress));
+			P.vel.x += ((P.vel.x * damp + (fieldVel.x / fieldWeight) * (1 - damp)) - P.vel.x) * dt * 8;
+			P.vel.y += ((P.vel.y * damp + (fieldVel.y / fieldWeight) * (1 - damp)) - P.vel.y) * dt * 8;
+			P.vel.z += ((P.vel.z * damp + (fieldVel.z / fieldWeight) * (1 - damp)) - P.vel.z) * dt * 8;
 		}
 	}
 
@@ -378,7 +379,7 @@ xSSPS.prototype.add = function(inArgs) {
 		group: null,
 		pos: pos,
 		ang: ang,
-		temp: 300,//temp,
+		temp: 700,//temp,
 		vel: args.vel || new THREE.Vector3(Math._random()*1-0.5, Math._random()*1-0.5, Math._random()*1-0.5),
 		avel: args.avel || new THREE.Vector3(0, 0, 0),
 		mass: type.mass,
@@ -401,8 +402,8 @@ xSSPS.prototype.seedTypes = function() {
 
 	this.types.push({
 		name: 'Hydrogen', id: 1,
-		mass: 1,
-		randWeight: 10,
+		mass: 2.5,
+		randWeight: 100,
 		heatPerPressure: 1,
 		heatDamp: 0.9,
 		__fn: () => (this.makeMaterial({
@@ -421,29 +422,30 @@ xSSPS.prototype.seedTypes = function() {
 			ttemp1: 6900,
 			ttemp2: 7000,
 			lr: 0.4,
-			ldamp: 0.5,
-			clr: { r: 0.15, g: 0.15, b: 0.2 },
-			opacity: 0.1
+			ldamp: 0.005,
+			clr: { r: 0.75, g: 0.4, b: 0.0 },
+			opacity: 0.5,
+			incompress: 0.8
 		}, {
 			ttemp1: 7000,
 			ttemp2: 1e10,
 			lr: 3.5,
 			ldamp: 0.85,
 			clr: { r: 1.0, g: 0.5, b: 0.5 },
-			opacity: 0.3
+			opacity: 0.85
 		}))
 	});
 
 	this.types.push({
 		name: 'Iron', id: 2,
-		mass: 15.0,
+		mass: 5.0,
 		randWeight: 2,
 		heatPerPressure: 10,
 		heatDamp: 0.1,
 		__fn: () => (this.makeMaterial({
 			ttemp1: 550,
 			ttemp2: 600,
-			ldamp: 0.05,
+			ldamp: 0.25,
 			lr: 0.6,
 			ldamp: 0.85,
 			clr: { r: 0.175, g: 0.175, b: 0.2 },
@@ -452,13 +454,13 @@ xSSPS.prototype.seedTypes = function() {
 		}, {
 			ttemp1: 600,
 			ttemp2: 1e10,
-			ldamp: 0.15,
+			ldamp: 0.45,
 			lr: 0.45,
 			clr: { r: 0.85, g: 0.80, b: 0.0 },
 			eclr: { r: 0.75, g: 0.70, b: 0.0 },
 			opacity: 0.7
 		}, {
-			lr: 0.35,
+			lr: 0.55,
 			ttemp1: 1e10,
 			ttemp2: 1e10 + 1e5
 		}, {
@@ -632,7 +634,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 				solid.eclr ? solid.eclr.b : 0.02,
 				solid.opacity >= 0 ? solid.opacity : 0.9
 			),
-			incompress: solid.incompress >= 0 ? solid.incompress : 20/60,
+			incompress: solid.incompress >= 0 ? solid.incompress : 50/60,
 			opacity: solid.opacity >= 0 ? solid.opacity : 0.9,
 			geom: this.pgeom2,
 			gscale: 1.0
@@ -676,14 +678,14 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 			ttemp1: plasma.ttemp1 !== undefined ? plasma.ttemp1 : 8300,
 			ttemp2: plasma.ttemp2 !== undefined ? plasma.ttemp2 : 8800,
 			lr: plasma.lr || 4.5,
-			ldamp: plasma.ldamp || 0.85,
+			ldamp: plasma.ldamp || 0.95,
 			mat: mkShaderGasMaterial(
 				plasma.clr ? plasma.clr.r : 1.0,
 				plasma.clr ? plasma.clr.g : 1.0,
 				plasma.clr ? plasma.clr.b : 1.0,
 				plasma.opacity >= 0 ? plasma.opacity : 0.3,
 			),
-			incompress: solid.incompress >= 0 ? solid.incompress : 30/60,
+			incompress: solid.incompress >= 0 ? solid.incompress : 60/60,
 			opacity: plasma.opacity >= 0 ? plasma.opacity : 0.3,
 			geom: this.pgeom,
 			gscale: 1.4
