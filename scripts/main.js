@@ -11,9 +11,13 @@ window.SSPS = function () {
 	this.scene = new THREE.Scene();
 	this.scene.background = new THREE.Color( 0x000000 );
 
-	this.light = new THREE.PointLight( 0xffffff, 1, 1000 );
-	this.light.position.set( 100, 100, 100 );
-	this.scene.add( this.light );
+	this.light = [];
+	for (let i=0; i<5; i++) {
+		this.light[i] = new THREE.PointLight( 0xffffff, 1, 1000 );
+		this.light[i].position.set( 10000, 10000, 10000 );
+		this.light[i].visible = false;
+		this.scene.add( this.light[i] );
+	}
 
 	this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
 	this.renderer.setPixelRatio( window.devicePixelRatio );
@@ -35,7 +39,7 @@ SSPS.prototype.updateRender = function(dt) {
 
 	document.title = 'SSPS - ' + Math.floor(1 / dt) + ' fps';
 
-	const grav = this.psim.updateRender(dt);
+	const {grav, hl} = this.psim.updateRender(dt);
 
 	this.gp.x += (grav[0].p.x - this.gp.x) * dt * 2;
 	this.gp.y += (grav[0].p.y - this.gp.y) * dt * 2;
@@ -54,7 +58,14 @@ SSPS.prototype.updateRender = function(dt) {
 	this.camera.up.z = this.gp.z + Math.cos(ra + Math.PI / 2) * rr;
 	this.camera.up.x = this.gp.x + Math.sin(ra + Math.PI / 2) * rr;
 
-	this.light.position.set(this.gp.x, this.gp.y, this.gp.z);
+	for (let i=0; hl && i<hl.length; i++) {
+		this.light[i].position.set(hl[i].p.x, hl[i].p.y, hl[i].p.z);
+		this.light[i].intensity = hl[i].heat * 0.005;
+		this.light[i].visible = true;
+	}
+	for (let i=hl ? hl.length : 0; i<this.light.length; i++) {
+		this.light[i].visible = false;
+	}
 
 };
 

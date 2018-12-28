@@ -11,6 +11,8 @@ window.xSSPS = function(scene, camera) {
 	this.gConst = 0.005;
 	this.lFactor = 20.0;
 	this.minMassGravity = 10;
+	this.minHeatLight = 10;
+	this.nHeat = 5;
 	this.scene = scene;
 	this.camera = camera;
 
@@ -169,11 +171,14 @@ xSSPS.prototype.updateRender = function(dt) {
 		}
 	}
 
-	// compute gravity hash
+	// compute gravity hash & heat hash
 	const gravity = [];
+	const heatList = [];
 	for (let [hk, list] of mhash) {
+		const gph = new THREE.Vector3(0, 0, 0); 
 		const gp = new THREE.Vector3(0, 0, 0);
 		let tmass = 0.0;
+		let theat = 0.0;
 		for (let i=0; i<list.length; i++) {
 			const P = list[i];
 			const mass = P.mass;
@@ -181,6 +186,11 @@ xSSPS.prototype.updateRender = function(dt) {
 			gp.y += P.pos.y * mass;
 			gp.z += P.pos.z * mass;
 			tmass += mass;
+			const heat = Math.pow(P.temp, 0.125);
+			gph.x += P.pos.x * heat;
+			gph.y += P.pos.y * heat;
+			gph.z += P.pos.z * heat;
+			theat += heat;
 		}
 		if (tmass > this.minMassGravity) {
 			gp.x /= tmass;
@@ -191,9 +201,20 @@ xSSPS.prototype.updateRender = function(dt) {
 				mass: tmass
 			});
 		}
+		if (theat > this.minHeatLight) {
+			gph.x /= theat;
+			gph.y /= theat;
+			gph.z /= theat;
+			heatList.push({
+				p: gph,
+				heat: theat
+			});
+		}
 	}
 	gravity.sort((a, b) => (b.mass - a.mass));
 	gravity.length = Math.min(gravity.length, this.nGravity);
+	heatList.sort((a, b) => (b.heat - a.heat));
+	heatList.length = Math.min(heatList.length, this.nHeat);
 
 	let gtmass = gravity.length ? gravity[0].mass : 0;
 	let gtp = gravity.length ? new THREE.Vector3(gravity[0].p.x, gravity[0].p.y, gravity[0].p.z) : new THREE.Vector3(0, 0, 0);
@@ -336,6 +357,20 @@ xSSPS.prototype.updateRender = function(dt) {
 
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
+		
+		for (let j=0; j<heatList.length; j++) {
+			const H = heatList[j];
+			const dx = H.p.x - P.pos.x,
+				  dy = H.p.y - P.pos.y,
+				  dz = H.p.z - P.pos.z;
+			const dlenSq = (dx*dx + dy*dy + dz*dz);
+			if (dlenSq > 0.01) {
+				const dlen1 = Math.sqrt(dlenSq);
+				const dlen2 = H.heat / (Math.max(dlenSq, 20) * 0.1);
+				P.hTransfer += dlen2;
+			}
+		}
+
 		const pressure = P.spressure;
 		const hdamp = Math.pow(P.type.heatDamp, dt);
 		P.temp += Math.max(Math.min(P.hTransfer, 10000) - P.temp, 0) * hdamp * dt;
@@ -346,7 +381,7 @@ xSSPS.prototype.updateRender = function(dt) {
 		}
 	}
 
-	return [{p: this.gtp, mass: this.gtmass}];
+	return {grav: [{p: this.gtp, mass: this.gtmass}], hl: heatList};
 
 };
 
@@ -467,7 +502,7 @@ xSSPS.prototype.seedTypes = function() {
 			lr: 0.6,
 			ldamp: 0.85,
 			clr: { r: 0.175, g: 0.175, b: 0.2 },
-			eclr: { r: 0.175*.2, g: 0.175*.2, b: 0.2*.2 },
+			eclr: { r: 0.175*.05, g: 0.175*.05, b: 0.2*.05 },
 			opacity: 1.0
 		}, {
 			ttemp1: 600,
@@ -574,7 +609,7 @@ xSSPS.prototype.seedTypes = function() {
 			lr: 0.35,
 			ldamp: 0.25,
 			clr: { r: 0.4, g: 0.4, b: 0.4 },
-			eclr: { r: 0.4, g: 0.4, b: 0.4 },
+			eclr: { r: 0.04, g: 0.04, b: 0.04 },
 			opacity: 0.75
 		}, {
 			ttemp1: 10,
