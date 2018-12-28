@@ -3,8 +3,10 @@ window.xSSPS = function(scene, camera) {
 	this.list = [];
 	this.pgeom2 = new THREE.IcosahedronGeometry(0.5, 0);
 	this.pgeom = new THREE.PlaneBufferGeometry(3, 3, 1, 1);
-	this.hSize = 0.75;
+	this.hSize = 1.0;
+	this.fLen = this.hSize;
 	this.mhSize = 2.5;
+	this.restMass = 20;
 	this.nGravity = 15;
 	this.gConst = 0.005;
 	this.lFactor = 20.0;
@@ -29,6 +31,13 @@ xSSPS.prototype.updateRender = function(dt) {
 		const ix = (Math.floor(x/this.hSize)) + 1e5,
     	  	  iy = (Math.floor(y/this.hSize)) + 1e5,
     	  	  iz = (Math.floor(z/this.hSize)) + 1e5;
+  		return ((ix * 10223) + (iy * 12919) + (iz * 16127)) % 1e6;
+	};
+
+	const hash3Di = (x, y, z) => {
+		const ix = (x) + 1e5,
+    	  	  iy = (y) + 1e5,
+    	  	  iz = (z) + 1e5;
   		return ((ix * 10223) + (iy * 12919) + (iz * 16127)) % 1e6;
 	};
 
@@ -101,6 +110,13 @@ xSSPS.prototype.updateRender = function(dt) {
 	// update position & angle, mark in hash
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
+		if (!P.sphForce) {
+			P.sphForce = new THREE.Vector3(0, 0, 0);
+		}
+		P.vel.x += P.sphForce.x * dt;
+		P.vel.y += P.sphForce.y * dt;
+		P.vel.z += P.sphForce.z * dt;
+		P.sphForce.x = P.sphForce.y = P.sphForce.z = 0;
 		P.pos.x += P.vel.x * dt;
 		P.pos.y += P.vel.y * dt;
 		P.pos.z += P.vel.z * dt;
@@ -193,6 +209,7 @@ xSSPS.prototype.updateRender = function(dt) {
 	// update velocities with gravity
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
+		P.gpressure = 0;
 		for (let j=0; j<gravity.length; j++) {
 			const G = gravity[j];
 			const dx = G.p.x - P.pos.x,
@@ -202,6 +219,7 @@ xSSPS.prototype.updateRender = function(dt) {
 			if (dlenSq > 0.01) {
 				const dlen1 = Math.sqrt(dlenSq);
 				const dlen2 = G.mass / (Math.max(dlenSq, 20) * 0.1);
+				P.gpressure += dlen2;
 				P.vel.x += dlen2 * (dx / dlen1) * dt * this.gConst;
 				P.vel.y += dlen2 * (dy / dlen1) * dt * this.gConst;
 				P.vel.z += dlen2 * (dz / dlen1) * dt * this.gConst;
@@ -209,111 +227,38 @@ xSSPS.prototype.updateRender = function(dt) {
 		}
 	}
 
-	// handle collisions & sph
+	// SPH - Calculate pressures
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
 		let ix, iy, iz;
-		let dx, dy, dz, dlen;
-		const tested = new Map();
+		let dx, dy, dz, dlen, dlenSq;
+		let t;
+		const flen = this.fLen;
 
-		const fieldAdded = new Map();
-		const fieldVel = new THREE.Vector3(0, 0, 0);
-		let fieldWeight = 0;
+		let dmass = 0,
+			ndmass = 0;
 
 		for (ix=-1; ix<=1; ix++) {
 			for (iy=-1; iy<=1; iy++) {
 				for (iz=-1; iz<=1; iz++) {
-					const ihk = hash3D(
-						P.pos.x + ix * this.hSize,
-						P.pos.y + iy * this.hSize,
-						P.pos.z + iz * this.hSize
+					const ihk = hash3Di(
+						Math.floor(P.pos.x / this.hSize) + ix,
+						Math.floor(P.pos.y / this.hSize) + iy,
+						Math.floor(P.pos.z / this.hSize) + iz
 					);
 					if (hash.has(ihk)) {
 						const list2 = hash.get(ihk);
-
-						// calc field velocity
 						for (let j=0; j<list2.length; j++) {
 							const jP = list2[j];
-							if (!fieldAdded.has(jP.id)) {
-								fieldAdded.set(jP.id, true);
-								const sdist = sphereDist(
-									P.pos.x, P.pos.y, P.pos.z,
-									jP.pos.x, jP.pos.y, jP.pos.z,
-									P.lr, jP.lr
-								);
-								if (sdist < 0) {
-									const tweight = jP.mass * Math.pow(1 - Math.max(-sdist / (P.lr), 1), 0.5);
-									fieldWeight += tweight;
-									fieldVel.x += jP.vel.x * tweight;
-									fieldVel.y += jP.vel.y * tweight;
-									fieldVel.z += jP.vel.z * tweight;
-								}
-							}
-						}
-
-						// hard collisions
-						for (let j=0; j<list2.length; j++) {
-							const jP = list2[j];
-							if (jP.id > P.id && !tested.has(jP.id)) {
-								tested.set(jP.id, true);
-								const pR = P.lr * P.incompress * 0.75;
-								const jpR = jP.lr * jP.incompress * 0.75;
-								const sdist = sphereDist(
-									P.pos.x, P.pos.y, P.pos.z,
-									jP.pos.x, jP.pos.y, jP.pos.z,
-									pR, jpR
-								);
-								if (sdist < 0) {
-									dx = P.pos.x - jP.pos.x;
-									dy = P.pos.y - jP.pos.y;
-									dz = P.pos.z - jP.pos.z;
-									dlen = Math.sqrt(dx*dx+dy*dy+dz*dz);
-									if (dlen > 0.0001) {
-										dx /= dlen;
-										dy /= dlen;
-										dz /= dlen;
-
-										let x1;
-
-										x1 = dx*P.vel.x + dy*P.vel.y + dz*P.vel.z;
-										const vx1X = x1 * dx,
-											  vx1Y = x1 * dy,
-											  vx1Z = x1 * dz;
-										const vy1X = P.vel.x - vx1X,
-										      vy1Y = P.vel.y - vx1Y,
-										      vy1Z = P.vel.z - vx1Z;
-										const m1 = P.mass;
-
-										x1 = -dx*P.vel.x + -dy*P.vel.y + -dz*P.vel.z;
-										const vx2X = x1 * -dx,
-											  vx2Y = x1 * -dy,
-											  vx2Z = x1 * -dz;
-										const vy2X = jP.vel.x - vx2X,
-										      vy2Y = jP.vel.y - vx2Y,
-										      vy2Z = jP.vel.z - vx2Z;
-										const m2 = jP.mass;
-
-										const TM = (m1+m2);
-										const MA = (m1-m2)/TM,
-											  MB = (m2-m1)/TM,
-											  MC = (2*m2)/TM,
-											  MD = (2*m1)/TM;
-
-										const damp1 = Math.pow(P.ldamp, dt),
-										      damp2 = Math.pow(jP.ldamp, dt);
-
-										const ivx = (P.vel.x * m1 + jP.vel.x * m2) / TM,
-											  ivy = (P.vel.y * m1 + jP.vel.y * m2) / TM,
-											  ivz = (P.vel.z * m1 + jP.vel.z * m2) / TM;
-
-										P.vel.x = (vx1X*MA + vx2X*MC + vy1X) * damp1 + ivx * (1-damp1);
-										P.vel.y = (vx1Y*MA + vx2Y*MC + vy1Y) * damp1 + ivx * (1-damp1);
-										P.vel.z = (vx1Z*MA + vx2Z*MC + vy1Z) * damp1 + ivx * (1-damp1);
-										jP.vel.x = (vx1X*MD + vx2X*MB + vy2X) * damp2 + ivy * (1-damp2);
-										jP.vel.y = (vx1Y*MD + vx2Y*MB + vy2Y) * damp2 + ivy * (1-damp2);
-										jP.vel.z = (vx1Z*MD + vx2Z*MB + vy2Z) * damp2 + ivy * (1-damp2);
-									}
-								}
+							dx = P.pos.x - jP.pos.x;
+							dy = P.pos.y - jP.pos.y;
+							dz = P.pos.z - jP.pos.z;
+							dlenSq = dx*dx + dy*dy + dz*dz;
+							if (dlenSq < (flen*flen)) {
+								dlen = Math.sqrt(dlenSq);
+								t = 1 - dlen / flen;
+								dmass += t * t * jP.mass;
+								ndmass += t * t * t * jP.mass;
 							}
 						}
 					}
@@ -321,13 +266,65 @@ xSSPS.prototype.updateRender = function(dt) {
 			}
 		}
 
-		// Apply field force
-		if (fieldWeight > 0) {
-			const damp = 1 - (Math.pow(P.ldamp, dt) * (1 - P.incompress));
-			P.vel.x += ((P.vel.x * damp + (fieldVel.x / fieldWeight) * (1 - damp)) - P.vel.x) * dt * 8;
-			P.vel.y += ((P.vel.y * damp + (fieldVel.y / fieldWeight) * (1 - damp)) - P.vel.y) * dt * 8;
-			P.vel.z += ((P.vel.z * damp + (fieldVel.z / fieldWeight) * (1 - damp)) - P.vel.z) * dt * 8;
+		const incomp = Math.pow(P.incompress, dt);
+		P.spressure = (dmass - this.restMass) * incomp;
+		P.snpressure = ndmass * incomp;
+		P.dampdt = Math.pow(P.ldamp, dt);
+	}
+
+	// SPH - Calculate pressure forces
+	for (let i=0; i<this.list.length; i++) {
+		const P = this.list[i];
+		let ix, iy, iz;
+		let dx, dy, dz, dlen, dlenSq;
+		let dvx, dvy, dvz;
+		let t, f;
+		const flen = this.fLen;
+
+		for (ix=-1; ix<=1; ix++) {
+			for (iy=-1; iy<=1; iy++) {
+				for (iz=-1; iz<=1; iz++) {
+					const ihk = hash3Di(
+						Math.floor(P.pos.x / this.hSize) + ix,
+						Math.floor(P.pos.y / this.hSize) + iy,
+						Math.floor(P.pos.z / this.hSize) + iz
+					);
+					if (hash.has(ihk)) {
+						const list2 = hash.get(ihk);
+						for (let j=0; j<list2.length; j++) {
+							const jP = list2[j];
+							if (jP.id === P.id) {
+								continue;
+							}
+							dx = jP.pos.x - P.pos.x;
+							dy = jP.pos.y - P.pos.y;
+							dz = jP.pos.z - P.pos.z;
+							dlenSq = dx*dx + dy*dy + dz*dz;
+							if (dlenSq < (flen*flen)) {
+								dlen = Math.sqrt(dlenSq);
+								t = 1 - dlen / flen;
+								dvx = jP.vel.x - P.vel.x;
+								dvy = jP.vel.y - P.vel.y;
+    							dvz = jP.vel.z - P.vel.z;
+    							f = dt * t * (P.spressure + P.snpressure * t) / (2 * dlen);
+    							dx *= f; dy *= f; dz *= f;
+    							f = dt * t * (P.dampdt + jP.dampdt) * 0.5;
+    							dvx *= f; dvy *= f; dvz *= f;
+    							dx -= dvx; dy -= dvy; dz -= dvz;
+    							jP.sphForce.x += dx; jP.sphForce.y += dy; jP.sphForce.z += dz;
+    							P.sphForce.x -= dx; P.sphForce.y -= dy; P.sphForce.z -= dz;
+							}
+						}
+					}
+				}
+			}
 		}
+	}
+
+	for (let i=0; i<this.list.length; i++) {
+		const P = this.list[i];
+		const pressure = P.gpressure + P.spressure;
+		// TODO: calculate change in heat
 	}
 
 	return [{p: this.gtp, mass: this.gtmass}];
@@ -402,7 +399,7 @@ xSSPS.prototype.seedTypes = function() {
 
 	this.types.push({
 		name: 'Hydrogen', id: 1,
-		mass: 2.5,
+		mass: 1.5,
 		randWeight: 100,
 		heatPerPressure: 1,
 		heatDamp: 0.9,
