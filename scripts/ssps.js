@@ -2,14 +2,14 @@ window.xSSPS = function(scene, camera) {
 
 	this.list = [];
 	this.pgeom2 = new THREE.IcosahedronGeometry(0.5, 0);
-	this.pgeom = new THREE.PlaneBufferGeometry(3, 3, 1, 1);
+	this.pgeom = new THREE.PlaneBufferGeometry(2, 2, 1, 1);
 	this.hSize = 1.0;
 	this.fLen = this.hSize;
 	this.mhSize = 64;
 	this.mhMinSize = 1;
 	this.restMass = 20;
 	this.nGravity = 15;
-	this.gConst = 0.005;
+	this.gConst = 0.001;
 	this.lFactor = 20.0;
 	this.minMassGravity = 10;
 	this.minHeatLight = 10;
@@ -274,7 +274,7 @@ xSSPS.prototype.updateRender = function(dt) {
 
 		if (!node) {
 			for (let [mk, dummy] of mhroot) {
-				const mhi = mhgravity.get(node);
+				const mhi = mhgravity.get(mk);
 				if (mhi && mhi.count > 4) {
 					gravForce(p, mk, ret);
 				}
@@ -296,10 +296,10 @@ xSSPS.prototype.updateRender = function(dt) {
 
 		const vsz = (lsz * lsz) / dlenSq;
 
-		if (vsz < 4) {
+		if (vsz < 4 || !mhchild.has(node)) {
 			if (dlenSq > 0.01) {
 				const dlen1 = Math.sqrt(dlenSq);
-				const dlen2 = mhi.mass / (Math.max(dlenSq, 20) * 0.1);
+				const dlen2 = mhi.mass / (Math.max(dlenSq, 1) * 0.1);
 				ret.x += dlen2 * (dx / dlen1) * dt * this.gConst;
 				ret.y += dlen2 * (dy / dlen1) * dt * this.gConst;
 				ret.z += dlen2 * (dz / dlen1) * dt * this.gConst;
@@ -492,7 +492,7 @@ xSSPS.prototype.add = function(inArgs) {
 		meshList.push(mesh);
 	}
 
-	const iv = 1.5;
+	const iv = 3;
 
 	const obj = {
 		id: id,
@@ -524,7 +524,7 @@ xSSPS.prototype.seedTypes = function() {
 		name: 'Hydrogen', id: 1,
 		mass: 1.5,
 		randWeight: 10,
-		heatPerPressure: 1,
+		heatPerPressure: 0.1,
 		heatDamp: 0.9,
 		__fn: () => (this.makeMaterial({
 			ttemp1: -1000,
@@ -547,18 +547,18 @@ xSSPS.prototype.seedTypes = function() {
 			opacity: 0.5,
 			incompress: 0.8
 		}, {
-			ttemp1: 7000,
+			ttemp1: 1e10,
 			ttemp2: 1e10,
-			lr: 1.5,
-			ldamp: 0.1,
-			clr: { r: 1.0, g: 0.5, b: 0.5 },
+			lr: 0.65,
+			ldamp: 0.95,
+			clr: { r: 1.0, g: 1.0, b: 0.0 },
 			opacity: 0.85
 		}))
 	});
 
 	this.types.push({
 		name: 'Iron', id: 2,
-		mass: 5.0,
+		mass: 50.0,
 		randWeight: 0.1,
 		heatPerPressure: 10,
 		heatDamp: 0.4,
@@ -710,7 +710,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 		});
 		ret.depthTest = true;
 		ret.depthWrite = false;
-		//ret.blending = THREE.AdditiveBlending;
+		ret.blending = THREE.AdditiveBlending;
 		ret.needsUpdate = true;
 		return ret;
 	};
