@@ -70,12 +70,17 @@ xSSPS.prototype.updateRender = function(dt) {
 					const K = tkeys[k];
 					P[K] = S[K];
 				}
-				mesh.material.opacity = P.opacity;
+				if (mesh.material.uniforms) {
+					mesh.material.uniforms.color.w = P.opacity;
+				}
+				else {
+					mesh.material.opacity = P.opacity;
+				}
 				mesh.___visible = true;
 				break;
 			}
 			else if (P.temp < S.ttemp2 && j < (T.states.length-1)) {
-				const t = Math.pow((P.temp - S.ttemp1) / (S.ttemp2 - S.ttemp1), 5.0);
+				const t = Math.pow((P.temp - S.ttemp1) / (S.ttemp2 - S.ttemp1), 1.0);
 				const S2 = T.states[j+1];
 				const mesh = P.mesh[j];
 				const mesh2 = P.mesh[j+1];
@@ -83,10 +88,20 @@ xSSPS.prototype.updateRender = function(dt) {
 					const K = tkeys[k];
 					P[K] = S[K] * (1-t) + S2[K] * t;
 				}
-				mesh.material.opacity = S.opacity * (1-t);
+				if (mesh.material.uniforms) {
+					mesh.material.uniforms.color.w = S.opacity * (1-t);
+				}
+				else {
+					mesh.material.opacity = S.opacity * (1-t);
+				}
 				mesh.___visible = true;
 				if (t > 0.05) {
-					mesh2.material.opacity = S2.opacity * t;
+					if (mesh2.material.uniforms) {
+						mesh2.material.uniforms.color.w = S2.opacity * t;
+					}
+					else {
+						mesh2.material.opacity = S2.opacity * t;
+					}
 					mesh2.___visible = true;
 				}
 				break;
@@ -95,16 +110,10 @@ xSSPS.prototype.updateRender = function(dt) {
 		for (let j=0; j<T.states.length; j++) {
 			const mesh = P.mesh[j];
 			if (mesh.___visible !== mesh.___wasVisible) {
-				if (mesh.___visible) {
-					this.scene.add(mesh);
-				}
-				else {
-					this.scene.remove(mesh);
-				}
+				mesh.visible = mesh.___visible;
 			}
 		}
 		P.ldamp *= 0.25;
-		window.AAAA = true;
 	}
 
 	// update position & angle, mark in hash
@@ -272,7 +281,7 @@ xSSPS.prototype.updateRender = function(dt) {
 		P.dampdt = Math.pow(P.ldamp, dt);
 	}
 
-	// SPH - Calculate pressure forces
+	// SPH - Calculate pressure forces & heat transfer
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
 		let ix, iy, iz;
@@ -280,6 +289,8 @@ xSSPS.prototype.updateRender = function(dt) {
 		let dvx, dvy, dvz;
 		let t, f;
 		const flen = this.fLen;
+
+		P.hTransfer = 0;
 
 		for (ix=-1; ix<=1; ix++) {
 			for (iy=-1; iy<=1; iy++) {
@@ -313,6 +324,8 @@ xSSPS.prototype.updateRender = function(dt) {
     							dx -= dvx; dy -= dvy; dz -= dvz;
     							jP.sphForce.x += dx; jP.sphForce.y += dy; jP.sphForce.z += dz;
     							P.sphForce.x -= dx; P.sphForce.y -= dy; P.sphForce.z -= dz;
+
+    							P.hTransfer += jP.temp * t * t * t * t;
 							}
 						}
 					}
@@ -323,8 +336,14 @@ xSSPS.prototype.updateRender = function(dt) {
 
 	for (let i=0; i<this.list.length; i++) {
 		const P = this.list[i];
-		const pressure = P.gpressure + P.spressure;
-		// TODO: calculate change in heat
+		const pressure = P.spressure;
+		const hdamp = Math.pow(P.type.heatDamp, dt);
+		P.temp += Math.max(Math.min(P.hTransfer, 10000) - P.temp, 0) * hdamp * dt;
+		const ptemp = Math.min(pressure, 10000);
+		P.temp += (ptemp - P.temp) * hdamp * dt * P.type.heatPerPressure;
+		if (P.temp < 0) {
+			P.temp = 0;
+		}
 	}
 
 	return [{p: this.gtp, mass: this.gtmass}];
@@ -368,6 +387,8 @@ xSSPS.prototype.add = function(inArgs) {
 		const mesh = new THREE.Mesh(S.geom, S.mat);
 		mesh.position.set(pos.x, pos.y, pos.z);
 		mesh.rotation.set(ang.x, ang.y, ang.z, 'XYZ');
+		mesh.visible = false;
+		this.scene.add(mesh);
 		meshList.push(mesh);
 	}
 
@@ -376,7 +397,7 @@ xSSPS.prototype.add = function(inArgs) {
 		group: null,
 		pos: pos,
 		ang: ang,
-		temp: 700,//temp,
+		temp: 0,//temp,
 		vel: args.vel || new THREE.Vector3(Math._random()*1-0.5, Math._random()*1-0.5, Math._random()*1-0.5),
 		avel: args.avel || new THREE.Vector3(0, 0, 0),
 		mass: type.mass,
@@ -412,8 +433,8 @@ xSSPS.prototype.seedTypes = function() {
 			ttemp2: 60,
 			lr: 0.5,
 			ldamp: 0.25,
-			clr: { r: 0, g: 0, b: 0.2 },
-			eclr: { r: 0, g: 0, b: 0.05 },
+			clr: { r: 0.2, g: 0.2, b: 0.2 },
+			eclr: { r: 0.05, g: 0.05, b: 0.05 },
 			opacity: 0.5
 		}, {
 			ttemp1: 6900,
@@ -426,8 +447,8 @@ xSSPS.prototype.seedTypes = function() {
 		}, {
 			ttemp1: 7000,
 			ttemp2: 1e10,
-			lr: 3.5,
-			ldamp: 0.85,
+			lr: 1.5,
+			ldamp: 0.1,
 			clr: { r: 1.0, g: 0.5, b: 0.5 },
 			opacity: 0.85
 		}))
@@ -606,7 +627,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 		});
 		ret.opacity = opacity >= 0 ? opacity : 1.0;
 		ret.depthTest = true;
-		ret.depthWrite = false;
+		ret.depthWrite = true;
 		ret.needsUpdate = true;
 		return ret;
 	};
