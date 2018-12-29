@@ -30,7 +30,7 @@ window.SSPS = function () {
 	this.psim = new xSSPS(this.scene, this.camera);
 	this.gp = new THREE.Vector3(0, 0, 0);
 
-	for (let i=0; i<2000; i++) {
+	for (let i=0; i<1000; i++) {
 		this.psim.add();
 	}
 
@@ -96,7 +96,7 @@ SSPS.prototype.start = function () {
 		this.renderer.render( this.scene, this.camera );
 
 		const cTime = Date.timeStamp();
-		const dt = Math.max(Math.min(cTime - lTime, 1/24), 1/60) * 0.5 + lDt * 0.5;
+		const dt = Math.max(Math.min(cTime - lTime, 1/2), 1/60) * 0.5 + lDt * 0.5;
 		lDt = dt;
 		lTime = cTime;
 
