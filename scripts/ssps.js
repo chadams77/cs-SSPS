@@ -52,7 +52,7 @@ xSSPS.prototype.updateRender = function(dt) {
   		return (((ix * 10223) + (iy * 12919) + (iz * 16127)) % 1e6) + Math.floor(isz * 1e6);
 	};
 
-	const tkeys = [ 'lr', 'ldamp', 'gscale', 'opacity', 'incompress' ];
+	const tkeys = [ 'lr', 'visc', 'gscale', 'opacity', 'incompress' ];
 
 	// update state based on heat
 	for (let i=0; i<this.list.length; i++) {
@@ -114,7 +114,7 @@ xSSPS.prototype.updateRender = function(dt) {
 				mesh.visible = mesh.___visible;
 			}
 		}
-		P.ldamp *= 0.25;
+		P.visc *= 0.25;
 	}
 
 	// update position & angle, mark in hash
@@ -361,7 +361,7 @@ xSSPS.prototype.updateRender = function(dt) {
 		const incomp = Math.pow(P.incompress, dt);
 		P.spressure = (dmass - this.restMass) * incomp;
 		P.snpressure = ndmass * incomp;
-		P.dampdt = Math.pow(P.ldamp, dt);
+		P.viscdt = Math.pow(P.visc, dt);
 	}
 
 	// SPH - Calculate pressure forces & heat transfer
@@ -402,7 +402,7 @@ xSSPS.prototype.updateRender = function(dt) {
     							dvz = jP.vel.z - P.vel.z;
     							f = dt * t * (P.spressure + P.snpressure * t) / (2 * dlen);
     							dx *= f; dy *= f; dz *= f;
-    							f = dt * t * (P.dampdt + jP.dampdt) * 0.5;
+    							f = dt * t * (P.viscdt + jP.viscdt) * 0.5;
     							dvx *= f; dvy *= f; dvz *= f;
     							dx -= dvx; dy -= dvy; dz -= dvz;
     							jP.sphForce.x += dx; jP.sphForce.y += dy; jP.sphForce.z += dz;
@@ -507,7 +507,7 @@ xSSPS.prototype.add = function(inArgs) {
 		hr: 0.05,
 		lr: 0.25,
 		hdamp: 0.1,
-		ldamp: 0.55,
+		visc: 0.55,
 		hkey: 0,
 		type: type
 	};
@@ -534,51 +534,56 @@ xSSPS.prototype.seedTypes = function() {
 			ttemp1: 50,
 			ttemp2: 60,
 			lr: 0.5,
-			ldamp: 0.25,
 			clr: { r: 0.2, g: 0.2, b: 0.2 },
 			eclr: { r: 0.05, g: 0.05, b: 0.05 },
-			opacity: 0.5
+			opacity: 0.5,
+			
+			visc: 0.5, incompress: 0.75
 		}, {
 			ttemp1: 6900,
 			ttemp2: 7000,
 			lr: 0.4,
-			ldamp: 0.005,
 			clr: { r: 0.75, g: 0.4, b: 0.0 },
 			opacity: 0.5,
-			incompress: 0.8
+
+			visc: 0.1, incompress: 0.5
 		}, {
 			ttemp1: 1e10,
 			ttemp2: 1e10,
 			lr: 0.65,
-			ldamp: 0.95,
+			visc: 0.95,
 			clr: { r: 1.0, g: 1.0, b: 0.0 },
-			opacity: 0.85
+			opacity: 0.85,
+
+			visc: 0.9, incompress: 1.0
 		}))
 	});
 
 	this.types.push({
 		name: 'Iron', id: 2,
-		mass: 50.0,
-		randWeight: 0.1,
+		mass: 25.0,
+		randWeight: 1,
 		heatPerPressure: 10,
 		heatDamp: 0.4,
 		__fn: () => (this.makeMaterial({
 			ttemp1: 550,
 			ttemp2: 600,
-			ldamp: 0.25,
+			visc: 0.5,
 			lr: 0.6,
-			ldamp: 0.85,
 			clr: { r: 0.175, g: 0.175, b: 0.2 },
 			eclr: { r: 0.175*.05, g: 0.175*.05, b: 0.2*.05 },
-			opacity: 1.0
+			opacity: 1.0,
+			
+			visc: 0.9, incompress: 0.9
 		}, {
 			ttemp1: 600,
-			ttemp2: 1e10,
-			ldamp: 0.45,
+			ttemp2: 700,
 			lr: 0.45,
 			clr: { r: 0.85, g: 0.80, b: 0.0 },
 			eclr: { r: 0.75, g: 0.70, b: 0.0 },
-			opacity: 0.7
+			opacity: 0.7,
+
+			visc: 0.65, incompress: 0.65
 		}, {
 			lr: 0.55,
 			ttemp1: 1e10,
@@ -599,27 +604,30 @@ xSSPS.prototype.seedTypes = function() {
 		__fn: () => (this.makeMaterial({
 			ttemp1: 300,
 			ttemp2: 310,
-			ldamp: 0.075,
 			lr: 0.35,
 			clr: { r: 0.3, g: 0.5, b: 0.8 },
 			eclr: { r: 0.3/6, g: 0.5/6, b: 0.8/6 },
-			opacity: 0.9
+			opacity: 0.9,
+
+			visc: 0.9, incompress: 0.9
 		}, {
 			ttemp1: 400,
 			ttemp2: 410,
-			ldamp: 0.55,
 			lr: 0.30,
 			clr: { r: 0.3/6, g: 0.5/6, b: 0.3 },
 			eclr: { r: 0.3/36, g: 0.5/36, b: 0.3/6 },
-			opacity: 0.6
+			opacity: 0.6,
+
+			visc: 0.1, incompress: 0.75
 		}, {
 			ttemp1: 1e10,
 			ttemp2: 1e10 + 1e5,
-			ldamp: 0.8,
 			lr: 0.25,
 			clr: { r: 0.8, g: 0.85, b: 1.0 },
 			eclr: { r: 0.8/6, g: 0.85/6, b: 1.0/6 },
-			opacity: 0.2
+			opacity: 0.2,
+
+			visc: 0.9, incompress: 0.9
 		}, {
 			lr: 0.2,
 			ttemp1: 1e11,
@@ -640,31 +648,34 @@ xSSPS.prototype.seedTypes = function() {
 			ttemp1: 50,
 			ttemp2: 60,
 			lr: 0.5,
-			ldamp: 0.25,
 			clr: { r: 0, g: 0, b: 0.4 },
 			eclr: { r: 0, g: 0, b: 0.1 },
-			opacity: 0.75
+			opacity: 0.75,
+
+			visc: 0.95, incompress: 0.75
 		}, {
 			ttemp1: 250,
 			ttemp2: 1e10,
 			lr: 0.75,
-			ldamp: 0.5,
 			clr: { r: 0.0, g: 0.0, b: 0.4 },
-			opacity: 0.2
+			opacity: 0.2,
+
+			visc: 0.1, incompress: 0.75
 		}, {
 			ttemp1: 1e10,
 			ttemp2: 1e10 + 5,
 			lr: 3.5,
-			ldamp: 0.85,
 			clr: { r: 1.0, g: 0.5, b: 1.0 },
-			opacity: 0.3
+			opacity: 0.3,
+
+			visc: 0.01, incompress: 0.75
 		}))
 	});
 
 	this.types.push({
 		name: 'Oxygen', id: 5,
 		mass: 0.1,
-		randWeight: 5,
+		randWeight: 1,
 		heatPerPressure: 5,
 		heatDamp: 0.2,
 		__fn: () => (this.makeMaterial({
@@ -674,24 +685,27 @@ xSSPS.prototype.seedTypes = function() {
 			ttemp1: 0,
 			ttemp2: 10,
 			lr: 0.35,
-			ldamp: 0.25,
 			clr: { r: 0.4, g: 0.4, b: 0.4 },
 			eclr: { r: 0.04, g: 0.04, b: 0.04 },
-			opacity: 0.75
+			opacity: 0.75,
+
+			visc: 0.95, incompress: 0.75
 		}, {
 			ttemp1: 10,
 			ttemp2: 5000,
 			lr: 0.25,
-			ldamp: 0.5,
 			clr: { r: 0.7, g: 0.7, b: 0.7 },
-			opacity: 0.2
+			opacity: 0.2,
+
+			visc: 0.1, incompress: 0.75
 		}, {
 			ttemp1: 5000,
 			ttemp2: 1e10 + 5,
 			lr: 1.0,
-			ldamp: 0.85,
 			clr: { r: 1.0, g: 0.5, b: 1.0 },
-			opacity: 0.3
+			opacity: 0.3,
+
+			visc: 0.01, incompress: 0.75
 		}))
 	});
 
@@ -744,7 +758,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 			ttemp1: solid.ttemp1 !== undefined ? solid.ttemp1 : 600,
 			ttemp2: solid.ttemp2 !== undefined ? solid.ttemp2 : 650,
 			lr: solid.lr || 0.5,
-			ldamp: solid.ldamp || 0.05,
+			visc: solid.visc || 0.05,
 			mat: mkShaderSolidMaterial(
 				solid.clr ? solid.clr.r : 0.2,
 				solid.clr ? solid.clr.g : 0.2,
@@ -763,7 +777,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 			ttemp1: liquid.ttemp1 !== undefined ? liquid.ttemp1 : 1200,
 			ttemp2: liquid.ttemp2 !== undefined ? liquid.ttemp2 : 1300,
 			lr: liquid.lr || 0.65,
-			ldamp: liquid.ldamp || 0.35,
+			visc: liquid.visc || 0.35,
 			mat: mkShaderSolidMaterial(
 				liquid.clr ? liquid.clr.r : 0.5,
 				liquid.clr ? liquid.clr.g : 0.2,
@@ -782,7 +796,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 			ttemp1: gas.ttemp1 !== undefined ? gas.ttemp1 : 3300,
 			ttemp2: gas.ttemp2 !== undefined ? gas.ttemp2 : 3350,
 			lr: gas.lr || 1.5,
-			ldamp: gas.ldamp || 0.75,
+			visc: gas.visc || 0.75,
 			mat: mkShaderGasMaterial(
 				gas.clr ? gas.clr.r : 1.0,
 				gas.clr ? gas.clr.g : 0.5,
@@ -798,7 +812,7 @@ xSSPS.prototype.makeMaterial = function(iSolid, iLiquid, iGas, iPlasma) {
 			ttemp1: plasma.ttemp1 !== undefined ? plasma.ttemp1 : 8300,
 			ttemp2: plasma.ttemp2 !== undefined ? plasma.ttemp2 : 8800,
 			lr: plasma.lr || 4.5,
-			ldamp: plasma.ldamp || 0.95,
+			visc: plasma.visc || 0.95,
 			mat: mkShaderGasMaterial(
 				plasma.clr ? plasma.clr.r : 1.0,
 				plasma.clr ? plasma.clr.g : 1.0,
