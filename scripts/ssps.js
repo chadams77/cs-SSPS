@@ -1,16 +1,16 @@
 window.xSSPS = function(RSIZE) {
 
 	this.RSIZE = RSIZE || 512;
-	this.PCOUNT = 500;
+	this.PCOUNT = 512;
 
-	this.restDensity = 4;
-	this.fieldLen = 2;
-	this.gConst = 0.02;
+	this.restDensity = 0.1;
+	this.fieldLen = 4;
+	this.gConst = 0.002;
 
 	this.cam = {
-		p: new THREE.Vector3(0, 0, 0),
-		dir: new THREE.Vector3(1, 0, 0),
-		up: new THREE.Vector3(0, 1, 0),
+		p: {x: 0, y: 0, z: 0},
+		dir: {x: 1, y: 0, z: 0},
+		up: {x: 0, y: 1, z: 0},
 		nearW: 1,
 		farW: 1000,
 		farDist: 1000
@@ -130,6 +130,16 @@ window.xSSPS = function(RSIZE) {
 	}`);
 
 	/*
+		INIT SUPPORT FUNCTIONS
+	 */	
+
+	this.gpu.addNativeFunction('random', `float random(float sequence, float seed) {
+
+    	return fract(sin(dot(vec2(seed, sequence), vec2(12.9898, 78.233))) * 43758.5453);
+	
+	}`);
+
+	/*
 		VELOCITY UPDATE KERNEL
 	 */
 
@@ -166,13 +176,13 @@ window.xSSPS = function(RSIZE) {
 		var ret = [mvx, mvy, mvz];
 
 		for (var i=0; i<this.constants.PCOUNT; i++) {
-			if ((i - me) > 0.01) {
+			if (abs(i - me) > 0.01) {
 				var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
 				var ovel = [velocities[i*3], velocities[i*3+1], velocities[i*3+2]];
 				var mass = attrs[i*5+2];
 				var jmf = (2. * mass) / (mass + mmass);
 				var dret = [0., 0., 0.]; dret = pressForce(mpos, opos, mvel, ovel, this.constants.fieldLen, dt, spressure, snpressure, viscdt);
-				ret[0] += dret[0]*dt; ret[1] += dret[1]*dt; ret[2] += dret[2]*dt;
+				ret[0] += dret[0]; ret[1] += dret[1]; ret[2] += dret[2];
 	    	}
     	}
 
@@ -300,6 +310,70 @@ window.xSSPS = function(RSIZE) {
 		return kern(arr);
 	};
 
+	const seedPositions = this.gpu.createKernel(function(){
+		var t = random(Math.floor(this.thread.x / 3), this.constants.seed + 0.5);
+		var r = t * this.constants.maxr;
+		var a = random(Math.floor(this.thread.x / 3), this.constants.seed + 1.5);
+		var comp = this.thread.x % 3;
+		if (comp < 0.01) {
+			return Math.cos(a) * r;
+		}
+		else if (comp < 1.01) {
+			return Math.sin(a) * r;
+		}
+		else {
+			return 0.0;
+		}
+	}, {
+		constants: {
+			maxr: 100,
+			seed: Math.random() * 1e6
+		},
+		outputToTexture: true,
+		output: [this.PCOUNT * 3],
+		canvas: this.canvas
+	});
+
+	const seedVelocities = this.gpu.createKernel(function(){
+		var t = random(this.thread.x, this.constants.seed + 0.5);
+		return (t - 0.5) * this.constants.iv;
+	}, {
+		constants: {
+			iv: 1.5,
+			seed: Math.random() * 1e6
+		},
+		outputToTexture: true,
+		output: [this.PCOUNT * 3],
+		canvas: this.canvas
+	});
+
+	const seedAttrs = this.gpu.createKernel(function(){
+		var comp = this.thread.x % 5;
+		if (comp < 0.01) {
+			return 0.25; // radius
+		}
+		else if (comp < 1.01) {
+			return 0.5; // density
+		}
+		else if (comp < 2.01) {
+			return 0.2; // mass
+		}
+		else if (comp < 3.01) {
+			return 0.8; // incompress
+		}
+		else {
+			return 0.75; // visc
+		}
+	}, {
+		constants: {
+			iv: 50,
+			seed: Math.random() * 1e6
+		},
+		outputToTexture: true,
+		output: [this.PCOUNT * 5],
+		canvas: this.canvas
+	});
+
 	/*
 		COPPIER
 	 */
@@ -317,56 +391,11 @@ window.xSSPS = function(RSIZE) {
 	/*
 	 * Seed Particles
 	 */ 
-
-	this.list = [];
-	const maxr = 50;
-	const iv = 1.5;
-
-	for (let i=0; i<this.PCOUNT; i++) {
-		const t = Math._random()*0.95 + 0.05;
-		const r = t * maxr;
-		const a = Math._random() * Math.PI * 2;
-		this.list.push({
-			pos: {
-				x: Math.cos(a) * r,
-				y: Math.sin(a) * r,
-				z: 0
-			},
-			vel: {
-				x: Math._random() * iv - (iv * 0.5),
-				y: Math._random() * iv - (iv * 0.5),
-				z: Math._random() * iv - (iv * 0.5)
-			},
-			radius: 0.25,
-			density: 0.5,
-			mass: 5.0,
-			incompress: 0.5,
-			visc: 0.75
-		})
-	}
-
-	/*
-		Upload particle data
-	 */
 	this.data = {
-		pos: makeDataTexture(this.list, (item, out) => {
-			out.push(item.pos.x);
-			out.push(item.pos.y);
-			out.push(item.pos.z);
-		}),
-		vel: makeDataTexture(this.list, (item, out) => {
-			out.push(item.vel.x);
-			out.push(item.vel.y);
-			out.push(item.vel.z);
-		}),
-		attr: makeDataTexture(this.list, (item, out) => {
-			out.push(item.radius);
-			out.push(item.density);
-			out.push(item.mass);
-			out.push(item.incompress);
-			out.push(item.visc);
-		})
-	}
+		pos: seedPositions(),
+		vel: seedVelocities(),
+		attr: seedAttrs()
+	};
 
 	/*
 		Make coppiers
