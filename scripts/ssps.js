@@ -3,7 +3,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	this.RSIZE = RSIZE || 512;
 	this.PCOUNT = PCOUNT || 512;
 
-	this.restDensity = 0.05;
+	this.restDensity = 0.1;
 	this.fieldLen = 4;
 	this.gConst = 0.02;
 
@@ -11,9 +11,18 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		p: {x: 0, y: 0, z: 0},
 		dir: {x: 1, y: 0, z: 0},
 		up: {x: 0, y: 1, z: 0},
-		nearW: 1,
+		nearW: 0.0001,
 		farW: 1000,
 		farDist: 1000
+	};
+
+	this.move = {
+		toLR: 0,
+		toUD: 0,
+		toFR: 0,
+		tLR: 0,
+		tUD: 0,
+		tFR: 0
 	};
 	
 	this.gpu = new GPU();
@@ -44,16 +53,10 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
 	this.gpu.addNativeFunction('getRay0', `vec3 getRay0(vec2 uv,  vec3 c0, vec3 cd, vec3 up, float s0, float s1, float slen) {
     	
-		float _S=sin(-3.14159265359*0.5);
-		float _C=cos(-3.14159265359*0.5);
-		float _OC=1.0-_C;
-		vec3 _AS=cd*_S;
-		mat3 _P=mat3(cd.x*cd,cd.y*cd,cd.z*cd);
-		mat3 _Q=mat3(_C,-_AS.z,_AS.y,_AS.z,_C,-_AS.x,-_AS.y,_AS.x,_C);
-		mat3 rot = _P*_OC+_Q;
+		up = normalize(cross(cross(cd, up), cd));
 
 		vec3 vup = normalize(cross(cd, up));
-		vec3 vleft = normalize(rot * vup);
+		vec3 vleft = up;
 
 		vec2 X = (uv - vec2(0.5, 0.5)) * s0;
 
@@ -63,16 +66,10 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
 	this.gpu.addNativeFunction('getRayDir', `vec3 getRayDir(vec3 R0,  vec2 uv,  vec3 c0, vec3 cd, vec3 up, float s0, float s1, float slen) {
     	
-		float _S=sin(-3.14159265359*0.5);
-		float _C=cos(-3.14159265359*0.5);
-		float _OC=1.0-_C;
-		vec3 _AS=cd*_S;
-		mat3 _P=mat3(cd.x*cd,cd.y*cd,cd.z*cd);
-		mat3 _Q=mat3(_C,-_AS.z,_AS.y,_AS.z,_C,-_AS.x,-_AS.y,_AS.x,_C);
-		mat3 rot = _P*_OC+_Q;
+		up = normalize(cross(cross(cd, up), cd));
 
 		vec3 vup = normalize(cross(cd, up));
-		vec3 vleft = normalize(rot * vup);
+		vec3 vleft = up;
 
 		vec2 X = (uv - vec2(0.5, 0.5)) * s1;
 
@@ -158,7 +155,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		var mdensity = attrs[me*5+1];
 		var mmass = attrs[me*5+2];
 		var incomp = attrs[me*5+3];
-		var viscdt = Math.pow(attrs[me*5+4], dt); // NEED TO POW BY DT?
+		var viscdt = attrs[me*5+4];
 		var ddensity = 0.0,
 			nddensity = 0.0;
 
@@ -238,6 +235,40 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		}
 	});
 
+	this.camRotKernel = this.gpu.createKernel(function(rotLR, rotUD, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
+		var uv = [0.5+rotLR, 0.5+rotUD];
+
+		var CC = [camCenter[0], camCenter[1], camCenter[2]],
+			CD = [camDir[0], camDir[1], camDir[2]],
+			CU = [camUp[0], camUp[1], camUp[2]];
+
+		var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+		var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+
+		if (this.thread.x < 0.01) {
+			return rayDir[0];
+		}
+		else if (this.thread.x < 1.01) {
+			return rayDir[1];
+		}
+		else if (this.thread.x < 2.01) {
+			return rayDir[2];
+		}
+	}, {
+		output: [ 3 ],
+		canvas: this.canvas,
+		paramTypes: {
+			rotLR: 'Number',
+			rotUD: 'Number',
+			camCenter: 'Array(3)',
+			camDir: 'Array(3)',
+			camUp: 'Array(3)',
+			camNearWidth: 'Number',
+			camFarWidth: 'Number',
+			camDist: 'Number'
+		}
+	});
+
 	/*
 		RENDER KERNEL
 	 */
@@ -265,7 +296,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			if (sr > 0.0) {
 				var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
 				if (ab[0] >= 0.0) {
-					int += (1.0 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
+					int += (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
 				}
 			}
 		}
@@ -339,7 +370,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		}
 	}, {
 		constants: {
-			maxr: 100,
+			maxr: 35,
 			seed: Math.random() * 1e6
 		},
 		outputToTexture: true,
@@ -375,7 +406,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			return 0.8; // incompress
 		}
 		else {
-			return 0.75; // visc
+			return 0.85; // visc
 		}
 	}, {
 		constants: {
@@ -420,7 +451,9 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 };
 
 
-xSSPS.prototype.updateRender = function(dt) {
+xSSPS.prototype.updateRender = function(keys, dt) {
+
+	this.handleInput(keys, dt);
 
 	// Update velocities via gravity & pressure
 	this.data.vel = this.velocityKernel(
@@ -446,5 +479,55 @@ xSSPS.prototype.updateRender = function(dt) {
 		[this.cam.up.x, this.cam.up.y, this.cam.up.z],
 		this.cam.nearW, this.cam.farW, this.cam.farDist
 	);
+
+};
+
+xSSPS.prototype.handleInput = function(keys, dt) {
+
+	this.move.toLR = this.move.toFR = this.move.toUD = 0;
+
+	if (keys[37]) {
+		this.move.toLR -= 1;
+	}
+	if (keys[39]) {
+		this.move.toLR += 1;
+	}
+	if (keys[38]) {
+		this.move.toUD -= 1;
+	}
+	if (keys[40]) {
+		this.move.toUD += 1;
+	}
+	if (keys[83]) {
+		this.move.toFR -= 1;
+	}
+	if (keys[87]) {
+		this.move.toFR += 1;
+	}
+
+	this.move.tLR += (this.move.toLR - this.move.tLR) * dt * 1.5;
+	this.move.tUD += (this.move.toUD - this.move.tUD) * dt * 1.5;
+	this.move.tFR += (this.move.toFR - this.move.tFR) * dt * 1.5;
+
+	const utmp = squat.normv(squat.crossv(squat.crossv([this.cam.dir.x, this.cam.dir.y, this.cam.dir.z], [this.cam.up.x, this.cam.up.y, this.cam.up.z]), [this.cam.dir.x, this.cam.dir.y, this.cam.dir.z]));
+	this.cam.up.x = utmp[0]; this.cam.up.y = utmp[1]; this.cam.up.z = utmp[2];
+
+	const ret = this.camRotKernel(
+		this.move.tLR / 25,
+		-this.move.tUD / 25,
+		[this.cam.p.x, this.cam.p.y, this.cam.p.z],
+		[this.cam.dir.x, this.cam.dir.y, this.cam.dir.z],
+		[this.cam.up.x, this.cam.up.y, this.cam.up.z],
+		1, 3.5, 2
+	);
+
+	this.cam.dir.x = ret[0];
+	this.cam.dir.y = ret[1];
+	this.cam.dir.z = ret[2];
+	
+	dlen = Math.sqrt(this.cam.dir.x*this.cam.dir.x + this.cam.dir.y*this.cam.dir.y + this.cam.dir.z*this.cam.dir.z);
+	this.cam.p.x += (this.cam.dir.x/dlen) * this.move.tFR * dt * 6;
+	this.cam.p.y += (this.cam.dir.y/dlen) * this.move.tFR * dt * 6;
+	this.cam.p.z += (this.cam.dir.z/dlen) * this.move.tFR * dt * 6;
 
 };
