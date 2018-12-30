@@ -1,11 +1,11 @@
-window.xSSPS = function(RSIZE) {
+window.xSSPS = function(PCOUNT, RSIZE) {
 
 	this.RSIZE = RSIZE || 512;
-	this.PCOUNT = 512;
+	this.PCOUNT = PCOUNT || 512;
 
-	this.restDensity = 0.1;
+	this.restDensity = 0.05;
 	this.fieldLen = 4;
-	this.gConst = 0.002;
+	this.gConst = 0.02;
 
 	this.cam = {
 		p: {x: 0, y: 0, z: 0},
@@ -91,7 +91,7 @@ window.xSSPS = function(RSIZE) {
 		vec3 delta = J - M;
 		float dlen = length(delta);
 				 
-		if (dlen > 0.0) {
+		if (dlen > 0.05) {
 			float dlen2 = jMass / (max(dlen*dlen, 1.) * 0.1);
 			return dlen2 * (delta / dlen) * f;
 		}
@@ -158,7 +158,7 @@ window.xSSPS = function(RSIZE) {
 		var mdensity = attrs[me*5+1];
 		var mmass = attrs[me*5+2];
 		var incomp = attrs[me*5+3];
-		var viscdt = Math.pow(attrs[me*5+4], dt);
+		var viscdt = Math.pow(attrs[me*5+4], dt); // NEED TO POW BY DT?
 		var ddensity = 0.0,
 			nddensity = 0.0;
 
@@ -182,11 +182,11 @@ window.xSSPS = function(RSIZE) {
 				var mass = attrs[i*5+2];
 				var jmf = (2. * mass) / (mass + mmass);
 				var dret = [0., 0., 0.]; dret = pressForce(mpos, opos, mvel, ovel, this.constants.fieldLen, dt, spressure, snpressure, viscdt);
-				ret[0] += dret[0]; ret[1] += dret[1]; ret[2] += dret[2];
+				ret[0] += dret[0] * jmf; ret[1] += dret[1] * jmf; ret[2] += dret[2] * jmf;
 	    	}
     	}
 
-    	var gf = this.constants.gConst * dt;
+    	var gf = this.constants.gConst * dt * 0.1;
     	for (var i=0; i<this.constants.PCOUNT; i++) {
     		var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
     		var mass = attrs[i*5+2];
@@ -265,7 +265,7 @@ window.xSSPS = function(RSIZE) {
 			if (sr > 0.0) {
 				var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
 				if (ab[0] >= 0.0) {
-					int += (1.0 / Math.pow(1 + ab[0], 0.25))*(ab[1]/(sr*2.));
+					int += (1.0 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
 				}
 			}
 		}

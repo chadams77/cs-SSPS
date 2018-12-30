@@ -3,7 +3,10 @@ window.SSPS = function () {
 	this.vpw = window.innerWidth;
 	this.vph = window.innerHeight;
 
-	this.psim = new xSSPS(512);
+	this.psim = new xSSPS(
+		512, // Particle count
+		512 // Render size
+	);
 
 	document.body.appendChild(this.psim.canvas);
 	this.psim.canvas.style.position = 'fixed';
@@ -41,7 +44,7 @@ SSPS.prototype.start = function () {
 		this.updateViewport();
 
 		const cTime = Date.timeStamp();
-		const dt = Math.max(Math.min(cTime - lTime, 1/10), 1/60) * 0.5 + lDt * 0.5;
+		const dt = Math.max(Math.min(cTime - lTime, 1/10), 1/240) * 0.5 + lDt * 0.5;
 		lDt = dt;
 		lTime = cTime;
 
