@@ -212,7 +212,13 @@ window.xSSPS = function(RSIZE) {
 		},
 		output: [ this.PCOUNT*3 ],
 		outputToTexture: true,
-		canvas: this.canvas
+		canvas: this.canvas,
+		paramTypes: {
+			particles: 'NumberTexture',
+			velocities: 'NumberTexture',
+			attrs: 'NumberTexture',
+			dt: 'Number'
+		}
 	});
 
 	/*
@@ -224,7 +230,12 @@ window.xSSPS = function(RSIZE) {
 	}, {
 		output: [ this.PCOUNT*3 ],
 		outputToTexture: true,
-		canvas: this.canvas
+		canvas: this.canvas,
+		paramTypes: {
+			particles: 'NumberTexture',
+			velocities: 'NumberTexture',
+			dt: 'Number'
+		}
 	});
 
 	/*
@@ -281,6 +292,8 @@ window.xSSPS = function(RSIZE) {
 		output: [this.RSIZE, this.RSIZE],
 		canvas: this.canvas,
 		paramTypes: {
+			particles: 'NumberTexture',
+			attrs: 'NumberTexture',
 			camCenter: 'Array(3)',
 			camDir: 'Array(3)',
 			camUp: 'Array(3)',
@@ -313,7 +326,7 @@ window.xSSPS = function(RSIZE) {
 	const seedPositions = this.gpu.createKernel(function(){
 		var t = random(Math.floor(this.thread.x / 3), this.constants.seed + 0.5);
 		var r = t * this.constants.maxr;
-		var a = random(Math.floor(this.thread.x / 3), this.constants.seed + 1.5);
+		var a = 3.141592 * 2.0 * random(Math.floor(this.thread.x / 3), this.constants.seed + 1.5);
 		var comp = this.thread.x % 3;
 		if (comp < 0.01) {
 			return Math.cos(a) * r;
