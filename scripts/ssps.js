@@ -7,6 +7,9 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	this.fieldLen = 4;
 	this.gConst = 0.02;
 
+	this.shootIndex = 0;
+	this.lkeys = {};
+
 	this.cam = {
 		p: {x: 0, y: 0, z: 0},
 		dir: {x: 1, y: 0, z: 0},
@@ -22,12 +25,20 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		toFR: 0,
 		tLR: 0,
 		tUD: 0,
-		tFR: 0
+		tFR: 0,
+		toPull: 0,
+		tPull: 0,
+		toPullR: 0,
+		tPullR: 0
 	};
 	
-	this.gpu = new GPU();
 	this.canvas = document.createElement('canvas');
-	this.canvas.width = this.canvas.height = this.RSIZE;
+	this.ctx3d = this.canvas.getContext('webgl');
+	this.gpu = new GPU({
+		canvas: this.canvas,
+		webGl: this.ctx3d,
+		mode: 'webgl'
+	});
 
 	/*
 		RENDER SUPPORT FUNCTIONS (GLSL)
@@ -77,6 +88,24 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
 		return normalize((normalize(cd) * slen + far + c0) - R0);
 
+	}`);
+
+	this.gpu.addNativeFunction('reflectWrap', `vec3 reflectWrap(vec3 I, vec3 N) {
+
+    	return normalize(reflect(normalize(I), normalize(N)));
+	
+	}`);
+
+	this.gpu.addNativeFunction('refractWrap', `vec3 refractWrap(vec3 I, vec3 N, float eta) {
+
+    	return normalize(refract(normalize(I), normalize(N), eta));
+	
+	}`);
+
+	this.gpu.addNativeFunction('distanceWrap', `float distanceWrap(vec3 A, vec3 B) {
+
+    	return length(A - B);
+	
 	}`);
 
 	/*
@@ -140,8 +169,9 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		VELOCITY UPDATE KERNEL
 	 */
 
-	this.velocityKernel = this.gpu.createKernel(function(positions, velocities, attrs, dt) {
+	this.velocityKernel = this.gpu.createKernel(function(positions, velocities, attrs, pullMass, playerPos, dt) {
 
+		// Unpack particle
 		var comp = this.thread.x % 3;
 		var me = (this.thread.x - comp) / 3;
 		var mx = positions[me*3],
@@ -152,41 +182,64 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			mvy = velocities[me*3+1],
 		    mvz = velocities[me*3+2];
 		var mvel = [mvx, mvy, mvz];
-		var mdensity = attrs[me*5+1];
-		var mmass = attrs[me*5+2];
-		var incomp = attrs[me*5+3];
-		var viscdt = attrs[me*5+4];
+		var mdensity = attrs[me*6+1];
+		var mmass = attrs[me*6+2];
+		var incomp = attrs[me*6+3];
+		var viscdt = attrs[me*6+4];
 		var ddensity = 0.0,
 			nddensity = 0.0;
 
+		// Compute pressure on this particle
 		for (var i=0; i<this.constants.PCOUNT; i++) {
 			var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
-			var density = attrs[i*5+1];
+			var density = attrs[i*6+1];
 			var dret = [0, 0]; dret = partDensity(mpos, opos, this.constants.fieldLen);
 			ddensity += dret[0] * density;
 			nddensity += dret[1] * density;
 		}
 
+		// Interact with player by adding pressure
+		var opos = [playerPos[0], playerPos[1], playerPos[2]];
+		var fl2 = this.constants.fieldLen;
+		var pf = [0, 0];
+		if (pullMass > 0.0) {
+			pf = partDensity(mpos, opos, fl2);
+		}
+		ddensity += pf[0] * (pullMass / 10.0 * this.constants.restDensity);
+		nddensity += pf[1] * (pullMass / 10.0 * this.constants.restDensity);
+
 		var spressure = (ddensity - this.constants.restDensity) * incomp;
 		var snpressure = nddensity * incomp;
 
+		// Compute force from pressure on this particle
 		var ret = [mvx, mvy, mvz];
 
 		for (var i=0; i<this.constants.PCOUNT; i++) {
 			if (abs(i - me) > 0.01) {
 				var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
 				var ovel = [velocities[i*3], velocities[i*3+1], velocities[i*3+2]];
-				var mass = attrs[i*5+2];
+				var mass = attrs[i*6+2];
 				var jmf = (2. * mass) / (mass + mmass);
 				var dret = [0., 0., 0.]; dret = pressForce(mpos, opos, mvel, ovel, this.constants.fieldLen, dt, spressure, snpressure, viscdt);
 				ret[0] += dret[0] * jmf; ret[1] += dret[1] * jmf; ret[2] += dret[2] * jmf;
 	    	}
     	}
 
+    	// Player pressure
+    	if (pullMass > 0.0) {
+			var opos = [playerPos[0], playerPos[1], playerPos[2]];
+			var ovel = [0, 0, 0];
+			var mass = 1.0;
+			var jmf = (2. * mass) / (mass + mmass);
+			var dret = [0., 0., 0.]; dret = pressForce(mpos, opos, mvel, ovel, this.constants.fieldLen, dt, spressure, snpressure, viscdt);
+			ret[0] += dret[0] * jmf; ret[1] += dret[1] * jmf; ret[2] += dret[2] * jmf;    		
+    	}
+
+    	// Compute gravitational force on this particle
     	var gf = this.constants.gConst * dt * 0.1;
     	for (var i=0; i<this.constants.PCOUNT; i++) {
     		var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
-    		var mass = attrs[i*5+2];
+    		var mass = attrs[i*6+2];
     		var dret = [0., 0., 0.]; dret = compGravity(mpos, opos, mass, gf);
     		ret[0] += dret[0]; ret[1] += dret[1]; ret[2] += dret[2];
     	}
@@ -209,14 +262,43 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		},
 		output: [ this.PCOUNT*3 ],
 		outputToTexture: true,
-		canvas: this.canvas,
 		paramTypes: {
 			particles: 'NumberTexture',
 			velocities: 'NumberTexture',
 			attrs: 'NumberTexture',
+			playerPos: 'Array(3)',
+			pullMass: 'Number',
 			dt: 'Number'
 		}
 	});
+
+	/*
+		SET POSITION/VELOCITES
+	 */
+
+	const mkSetter = (pitch) => {
+		return this.gpu.createKernel(function(list, index, setv) {
+			if (Math.abs(index - Math.floor(this.thread.x / this.constants.pitch)) < 0.01) {
+				return setv[this.thread.x % this.constants.pitch];
+			}
+			else {
+				return list[this.thread.x];
+			}
+		}, {
+			output: [ this.PCOUNT*3 ],
+			outputToTexture: true,
+			constants: { PCOUNT: this.PCOUNT, pitch },
+			paramTypes: {
+				list: 'NumberTexture',
+				index: 'Number',
+				setv: 'Array(3)'
+			}
+		});
+	};
+	
+	this.setPosKernel = mkSetter(3);
+	this.setVelKernel = mkSetter(3);
+	this.setAttrKernel = mkSetter(6);
 
 	/*
 		POSITION UPDATE KERNEL
@@ -227,7 +309,6 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	}, {
 		output: [ this.PCOUNT*3 ],
 		outputToTexture: true,
-		canvas: this.canvas,
 		paramTypes: {
 			particles: 'NumberTexture',
 			velocities: 'NumberTexture',
@@ -256,7 +337,6 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		}
 	}, {
 		output: [ 3 ],
-		canvas: this.canvas,
 		paramTypes: {
 			rotLR: 'Number',
 			rotUD: 'Number',
@@ -273,66 +353,362 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		RENDER KERNEL
 	 */
 	
-	this.renderKernel = this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
+	this.renderMode = 1;
+	
+	this.renderKernel = [
+		this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
 
-		var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
+			var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
 
-		var CC = [camCenter[0], camCenter[1], camCenter[2]],
-			CD = [camDir[0], camDir[1], camDir[2]],
-			CU = [camUp[0], camUp[1], camUp[2]];
+			var CC = [camCenter[0], camCenter[1], camCenter[2]],
+				CD = [camDir[0], camDir[1], camDir[2]],
+				CU = [camUp[0], camUp[1], camUp[2]];
 
-		var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
-		var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+			var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+			var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
 
-		this.color(0., 0., 0., 1.);
+			this.color(0., 0., 0., 1.);
 
-		var minDist = -1.0;
+			var minDist = -1.0;
 
-		var int = 0;
+			var int = 0.1;
+			var intr = 0.0;
 
-		for (var i=0; i<this.constants.PCOUNT; i++) {
-			var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-			var sr = attrs[i * 5 + 0];
-			if (sr > 0.0) {
-				var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
-				if (ab[0] >= 0.0) {
-					int += (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
+			for (var i=0; i<this.constants.PCOUNT; i++) {
+				var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
+				var sr = attrs[i * 6 + 0];
+				if (sr > 0.0) {
+					var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
+					if (ab[0] >= 0.0) {
+						var l = 0.01 + (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
+						if (attrs[i * 6 + 5] > 0.5) {
+							intr += Math.pow(l, 0.5);
+						}
+						else {
+							int += l;
+						}
+					}
 				}
 			}
-		}
 
-		if (int < 0.25) {
-			this.color(0., 0., int, 1.);
-		}
-		else if (int < 0.5) {
-			this.color(0., (int-0.25)/0.25, 1., 1.);
-		}
-		else if (int < 1.0) {
-			this.color((int-0.5)/0.5, 1., 1., 1.);
-		}
-		else {
-			this.color(1., 1., 1., 1.);
-		}
+			var outClr = [
+				Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
+				Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
+				Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
+			];
 
-	}, {
-		graphical: true,
-		constants: {
-			RSIZE: this.RSIZE,
-			PCOUNT: this.PCOUNT,
-		},
-		output: [this.RSIZE, this.RSIZE],
-		canvas: this.canvas,
-		paramTypes: {
-			particles: 'NumberTexture',
-			attrs: 'NumberTexture',
-			camCenter: 'Array(3)',
-			camDir: 'Array(3)',
-			camUp: 'Array(3)',
-			camNearWidth: 'Number',
-			camFarWidth: 'Number',
-			camDist: 'Number'
-		}
-	});
+			if (int > 0.01 && int < 0.25) {
+				outClr[2] = int;
+			}
+			else if (int < 0.5) {
+				outClr[1] = (int-0.25)/0.25;
+				outClr[2] = 1.;
+			}
+			else if (int < 1.0) {
+				outClr[0] = (int-0.5)/0.5;
+				outClr[1] = 1.;
+				outClr[2] = 1.;
+			}
+			else {
+				outClr[0] = 1.;
+				outClr[1] = 1.;
+				outClr[2] = 1.;
+			}
+
+			if (intr < 0.25) {
+				outClr[0] = intr;
+			}
+			else if (intr < 0.5) {
+				outClr[1] += (intr-0.25)/0.25;
+				outClr[0] += 1.;
+			}
+			else if (intr < 1.0) {
+				outClr[2] += (intr-0.5)/0.5;
+				outClr[1] += 1.;
+				outClr[0] += 1.;
+			}
+			else {
+				outClr[2] += 1.;
+				outClr[1] += 1.;
+				outClr[0] += 1.;
+			}
+
+			this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
+
+		}, {
+			graphical: true,
+			constants: {
+				RSIZE: this.RSIZE,
+				PCOUNT: this.PCOUNT,
+			},
+			output: [this.RSIZE, this.RSIZE],
+			paramTypes: {
+				particles: 'NumberTexture',
+				attrs: 'NumberTexture',
+				camCenter: 'Array(3)',
+				camDir: 'Array(3)',
+				camUp: 'Array(3)',
+				camNearWidth: 'Number',
+				camFarWidth: 'Number',
+				camDist: 'Number'
+			}
+		}),
+		this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
+
+			var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
+
+			var CC = [camCenter[0], camCenter[1], camCenter[2]],
+				CD = [camDir[0], camDir[1], camDir[2]],
+				CU = [camUp[0], camUp[1], camUp[2]];
+
+			var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+			var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+
+			this.color(0., 0., 0., 1.);
+
+			var minDist = -1.0;
+
+			var int = 0.1;
+			var intr = 0.0;
+
+			var ms0 = [0., 0., 0.];
+			var msr = -1;
+			var msl = 0.0;
+			var mst = 0.0;
+
+			for (var i=0; i<this.constants.PCOUNT; i++) {
+				var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
+				var sr = attrs[i * 6 + 0];
+				if (sr > 0.0) {
+					var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
+					if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
+						ms0 = s0;
+						msr = sr;
+						msl = (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 1.25);
+						mst = attrs[i * 6 + 5];
+						minDist = ab[0];
+					}
+				}
+			}
+
+			if (minDist >= 0.) {
+				if (mst > 0.5) {
+					intr += 2.5 * msl;
+				}
+				else {
+					int += 2.5 * msl;
+				}
+			}
+
+			var outClr = [
+				Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
+				Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
+				Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
+			];
+
+			if (int > 0.01 && int < 0.25) {
+				outClr[2] = int * 2.;
+			}
+			else if (int < 0.5) {
+				outClr[1] = (int-0.25)/0.25;
+				outClr[2] = 1.;
+			}
+			else if (int < 1.0) {
+				outClr[0] = (int-0.5)/0.5;
+				outClr[1] = 1.;
+				outClr[2] = 1.;
+			}
+			else {
+				outClr[0] = 1.;
+				outClr[1] = 1.;
+				outClr[2] = 1.;
+			}
+
+			if (intr < 0.25) {
+				outClr[0] += intr * 2.;
+			}
+			else if (intr < 0.5) {
+				outClr[1] += (intr-0.25)/0.25;
+				outClr[0] += 1.;
+			}
+			else if (intr < 1.0) {
+				outClr[2] += (intr-0.5)/0.5;
+				outClr[1] += 1.;
+				outClr[0] += 1.;
+			}
+			else {
+				outClr[2] += 1.;
+				outClr[1] += 1.;
+				outClr[0] += 1.;
+			}
+
+			this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
+
+		}, {
+			graphical: true,
+			constants: {
+				RSIZE: this.RSIZE,
+				PCOUNT: this.PCOUNT,
+			},
+			output: [this.RSIZE, this.RSIZE],
+			paramTypes: {
+				particles: 'NumberTexture',
+				attrs: 'NumberTexture',
+				camCenter: 'Array(3)',
+				camDir: 'Array(3)',
+				camUp: 'Array(3)',
+				camNearWidth: 'Number',
+				camFarWidth: 'Number',
+				camDist: 'Number'
+			}
+		}),
+		this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
+
+			var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
+
+			var CC = [camCenter[0], camCenter[1], camCenter[2]],
+				CD = [camDir[0], camDir[1], camDir[2]],
+				CU = [camUp[0], camUp[1], camUp[2]];
+
+			var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+			var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+
+			this.color(0., 0., 0., 1.);
+
+			var minDist = -1.0;
+
+			var int = 0.1;
+			var intr = 0.0;
+
+			var ms0 = [0., 0., 0.];
+			var msr = -1.0;
+			var msl = 0.0;
+			var mst = 0.0;
+			var msi = -1.0;
+
+			for (var i=0; i<this.constants.PCOUNT; i++) {
+				var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
+				var sr = attrs[i * 6 + 0];
+				if (sr > 0.0) {
+					var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
+					if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
+						msi = i;
+						ms0 = s0;
+						msr = sr;
+						msl = (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 0.9);
+						mst = attrs[i * 6 + 5];
+						minDist = ab[0];
+					}
+				}
+			}
+
+			var outClr = [
+				Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
+				Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
+				Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
+			];
+
+			if (minDist >= 0.) {
+				if (mst > 0.5) {
+					intr += 1.5 * msl;
+				}
+				else {
+					int += 1.5 * msl;
+				}
+
+				var nr0 = [ray0[0] + rayDir[0] * minDist, ray0[1] + rayDir[1] * minDist, ray0[2] + rayDir[2] * minDist];
+				var norm = [nr0[0] - ms0[0], nr0[1] - ms0[1], nr0[2] - ms0[2]];
+				var nrDir = [0, 0, 0]; nrDir = refractWrap(rayDir, norm, 1.0 / 1.5);
+
+				msr = -1;
+				msl = 0.0;
+				mst = 0.0;
+				minDist = -1.0;
+
+				for (var i=0; i<this.constants.PCOUNT; i++) {
+					var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
+					var sr = attrs[i * 6 + 0];
+					if (sr > 0.0 && distanceWrap(s0, ms0) > (sr*0.2)) {
+						var ab = [0, 0]; ab = raySphere(nr0, nrDir, s0, sr);
+						if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
+							msr = sr;
+							msl = (0.35 / Math.pow(1 + distanceWrap(s0, ray0), 0.25))*Math.pow(ab[1]/(sr*2.), 0.9);
+							mst = attrs[i * 6 + 5];
+							minDist = ab[0];
+						}
+					}
+				}
+
+				if (minDist >= 0.) {
+					if (mst > 0.5) {
+						intr += 0.5 * msl;
+					}
+					else {
+						int += 0.5 * msl;
+					}
+					outClr[0] += Math.pow(Math.sin(nrDir[0] * 3.141592), 4.0) * 0.15 * 0.5;
+					outClr[1] += Math.pow(Math.sin(nrDir[1] * 3.141592), 4.0) * 0.15 * 0.5;
+					outClr[2] += Math.pow(Math.sin(nrDir[2] * 3.141592), 4.0) * 0.15 * 0.5;
+				}
+			}
+
+			if (int > 0.01 && int < 0.25) {
+				outClr[2] = int * 2.;
+			}
+			else if (int < 0.5) {
+				outClr[1] = (int-0.25)/0.25;
+				outClr[2] = 1.;
+			}
+			else if (int < 1.0) {
+				outClr[0] = (int-0.5)/0.5;
+				outClr[1] = 1.;
+				outClr[2] = 1.;
+			}
+			else {
+				outClr[0] = 1.;
+				outClr[1] = 1.;
+				outClr[2] = 1.;
+			}
+
+			if (intr < 0.25) {
+				outClr[0] += intr * 2.;
+			}
+			else if (intr < 0.5) {
+				outClr[1] += (intr-0.25)/0.25;
+				outClr[0] += 1.;
+			}
+			else if (intr < 1.0) {
+				outClr[2] += (intr-0.5)/0.5;
+				outClr[1] += 1.;
+				outClr[0] += 1.;
+			}
+			else {
+				outClr[2] += 1.;
+				outClr[1] += 1.;
+				outClr[0] += 1.;
+			}
+
+			this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
+
+		}, {
+			graphical: true,
+			constants: {
+				RSIZE: this.RSIZE,
+				PCOUNT: this.PCOUNT,
+			},
+			output: [this.RSIZE, this.RSIZE],
+			paramTypes: {
+				particles: 'NumberTexture',
+				attrs: 'NumberTexture',
+				camCenter: 'Array(3)',
+				camDir: 'Array(3)',
+				camUp: 'Array(3)',
+				camNearWidth: 'Number',
+				camFarWidth: 'Number',
+				camDist: 'Number'
+			}
+		})		
+	];
 
 	/*
 		INIT KERNEL
@@ -348,14 +724,16 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			return parray[this.thread.x];
 		}, {
 			outputToTexture: true,
-			output: [size],
-			canvas: this.canvas
+			output: [size]
 		});
 		return kern(arr);
 	};
 
 	const seedPositions = this.gpu.createKernel(function(){
 		var t = random(Math.floor(this.thread.x / 3), this.constants.seed + 0.5);
+		if (Math.floor(this.thread.x / 3) > (this.constants.PCOUNT-33)) {
+			t + 1.0;
+		}
 		var r = t * this.constants.maxr;
 		var a = 3.141592 * 2.0 * random(Math.floor(this.thread.x / 3), this.constants.seed + 1.5);
 		var comp = this.thread.x % 3;
@@ -371,11 +749,11 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	}, {
 		constants: {
 			maxr: 35,
-			seed: Math.random() * 1e6
+			seed: Math.random() * 1e6,
+			PCOUNT: this.PCOUNT
 		},
 		outputToTexture: true,
-		output: [this.PCOUNT * 3],
-		canvas: this.canvas
+		output: [this.PCOUNT * 3]
 	});
 
 	const seedVelocities = this.gpu.createKernel(function(){
@@ -384,15 +762,15 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	}, {
 		constants: {
 			iv: 1.5,
-			seed: Math.random() * 1e6
+			seed: Math.random() * 1e6,
+			PCOUNT: this.PCOUNT
 		},
 		outputToTexture: true,
-		output: [this.PCOUNT * 3],
-		canvas: this.canvas
+		output: [this.PCOUNT * 3]
 	});
 
 	const seedAttrs = this.gpu.createKernel(function(){
-		var comp = this.thread.x % 5;
+		var comp = this.thread.x % 6;
 		if (comp < 0.01) {
 			return 0.25; // radius
 		}
@@ -405,17 +783,27 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		else if (comp < 3.01) {
 			return 0.8; // incompress
 		}
+		else if (comp < 4.01) {
+			// visc
+			return 0.35;
+		}
 		else {
-			return 0.85; // visc
+			// type
+			if (Math.floor(this.thread.x / 6) > (this.constants.PCOUNT-33)) {
+				return 1.0;
+			}
+			else {
+				return 0.0;
+			}
 		}
 	}, {
 		constants: {
 			iv: 50,
-			seed: Math.random() * 1e6
+			seed: Math.random() * 1e6,
+			PCOUNT: this.PCOUNT
 		},
 		outputToTexture: true,
-		output: [this.PCOUNT * 5],
-		canvas: this.canvas
+		output: [this.PCOUNT * 6]
 	});
 
 	/*
@@ -427,8 +815,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			return parray[this.thread.x];
 		}, {
 			outputToTexture: true,
-			output: [isize * this.PCOUNT],
-			canvas: this.canvas
+			output: [isize * this.PCOUNT]
 		})
 	};
 
@@ -446,7 +833,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	 */
 	this.posCoppier = makeCoppier(3);
 	this.velCoppier = makeCoppier(3);
-	this.attrCoppier = makeCoppier(5);
+	this.attrCoppier = makeCoppier(6);
 
 };
 
@@ -460,6 +847,8 @@ xSSPS.prototype.updateRender = function(keys, dt) {
 		this.data.pos,
 		this.velCoppier(this.data.vel),
 		this.data.attr,
+		this.move.tPull,
+		[this.cam.p.x + this.cam.dir.x * this.move.tPullR, this.cam.p.y + this.cam.dir.y * this.move.tPullR, this.cam.p.z + this.cam.dir.z * this.move.tPullR],
 		dt
 	);
 
@@ -471,7 +860,8 @@ xSSPS.prototype.updateRender = function(keys, dt) {
 	);
 
 	// Render
-	this.renderKernel(
+	this.renderMode = this.renderMode % this.renderKernel.length;
+	this.renderKernel[this.renderMode](
 		this.data.pos,
 		this.data.attr,
 		[this.cam.p.x, this.cam.p.y, this.cam.p.z],
@@ -505,16 +895,54 @@ xSSPS.prototype.handleInput = function(keys, dt) {
 		this.move.toFR += 1;
 	}
 
+	if (this.lkeys[82] && !keys[82]) {
+		this.renderMode += 1;
+	}
+
+	if (this.lkeys[32] && !keys[32]) {
+		this.data.pos = this.setPosKernel(
+			this.posCoppier(this.data.pos),
+			(this.PCOUNT-1) - this.shootIndex,
+			[
+				this.cam.p.x + this.cam.dir.x * 0.5,
+				this.cam.p.y + this.cam.dir.y * 0.5,
+				this.cam.p.z + this.cam.dir.z * 0.5
+			]
+		);
+		this.data.vel = this.setVelKernel(
+			this.velCoppier(this.data.vel),
+			(this.PCOUNT-1) - this.shootIndex,
+			[
+				this.cam.dir.x * 15,
+				this.cam.dir.y * 15,
+				this.cam.dir.z * 15
+			]
+		);
+		this.shootIndex = (this.shootIndex + 1) % 32;
+	}
+	if (keys[69]) {
+		this.move.toPull = 10;
+		this.move.toPullR = 5;
+	}
+	else {
+		this.move.toPull = -1;
+		this.move.toPullR = 0.25;
+	}
+
+	this.lkeys = {...keys};
+
 	this.move.tLR += (this.move.toLR - this.move.tLR) * dt * 1.5;
 	this.move.tUD += (this.move.toUD - this.move.tUD) * dt * 1.5;
 	this.move.tFR += (this.move.toFR - this.move.tFR) * dt * 1.5;
+	this.move.tPull += (this.move.toPull - this.move.tPull) * dt * 1.5;
+	this.move.tPullR += (this.move.toPullR - this.move.tPullR) * dt * 1.5;
 
 	const utmp = squat.normv(squat.crossv(squat.crossv([this.cam.dir.x, this.cam.dir.y, this.cam.dir.z], [this.cam.up.x, this.cam.up.y, this.cam.up.z]), [this.cam.dir.x, this.cam.dir.y, this.cam.dir.z]));
 	this.cam.up.x = utmp[0]; this.cam.up.y = utmp[1]; this.cam.up.z = utmp[2];
 
 	const ret = this.camRotKernel(
-		this.move.tLR / 25,
-		-this.move.tUD / 25,
+		this.move.tLR / 35,
+		-this.move.tUD / 35,
 		[this.cam.p.x, this.cam.p.y, this.cam.p.z],
 		[this.cam.dir.x, this.cam.dir.y, this.cam.dir.z],
 		[this.cam.up.x, this.cam.up.y, this.cam.up.z],

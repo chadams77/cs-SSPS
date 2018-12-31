@@ -8,22 +8,53 @@ window.SSPS = function () {
 		512 // Render size
 	);
 
-	document.body.appendChild(this.psim.canvas);
-	this.psim.canvas.style.imageRendering = 'pixelated';
-	this.psim.canvas.style.position = 'fixed';
-	this.psim.canvas.style.zIndex = '1';
-	this.psim.canvas.style.top = '0%';
-	this.psim.canvas.style.left = 'calc(50vw - 50vh)';
-	this.psim.canvas.style.width = this.psim.canvas.style.width = '100vh';
+	this.rcanvas = this.psim.canvas;
+
+	this.canvas = document.createElement('canvas');
+	this.canvas.width = this.vpw;
+	this.canvas.height = this.vph;
+	this.canvas.style.position = 'fixed';
+	this.canvas.style.left = '0%';
+	this.canvas.style.top = '0%';
+	this.canvas.style.width = '100%';
+	this.canvas.style.height = '100%';
+	this.ctx = this.canvas.getContext('2d');
+	this.ctx.imageSmoothingEnabled = true;
+	this.ctx.imageSmoothingQuality = 'high';
+	document.body.appendChild(this.canvas);
 
 	this.keys = {};
 };
 
 SSPS.prototype.updateRender = function(dt) {
 
-	document.title = 'SSPS - ' + Math.floor(1 / dt) + ' fps';
-
 	this.psim.updateRender(this.keys, dt);
+
+	this.ctx.clearRect(0, 0, this.vpw, this.vph);
+	this.ctx.drawImage(this.rcanvas, 0, 0, this.rcanvas.width, this.rcanvas.height, this.vpw*0.5 - this.vph*0.5, 0, this.vph, this.vph);
+
+	const lines = [];
+
+	lines.push('SSPS - ' + Math.round(1 / dt) + ' fps - ' + this.psim.PCOUNT + ' particles @ ' + this.psim.RSIZE + 'x' + this.psim.RSIZE);
+	lines.push('[W] - Forward, [S] - Reverse, [ARROWS] - Look');
+	lines.push('[E] - Grab, [SPACE] - Shoot Particle');
+	lines.push('[R] - Cycle Render Mode (' + (this.psim.renderMode+1) + ' / ' + this.psim.renderKernel.length + ')');
+
+	const fs = 15;
+	const x = this.vpw*0.5 - this.vph*0.5 + 20;
+	let y = 20 + (fs * 0.9);
+	this.ctx.textAlign = 'left';
+	this.ctx.font = fs + 'px Courier New';
+	this.ctx.fillStyle = '#DDF';
+	this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+
+	for (let i=0; i<lines.length; i++) {
+		this.ctx.fillText('' + lines[i], x, y);
+		this.ctx.strokeText('' + lines[i], x, y);
+
+		y += fs + 3;
+	}
+
 
 };
 
@@ -53,7 +84,7 @@ SSPS.prototype.start = function () {
 		this.updateViewport();
 
 		const cTime = Date.timeStamp();
-		const dt = (Math.max(Math.min(cTime - lTime, 1/10), 1/240) || (1/60)) * 0.5 + lDt * 0.5;
+		const dt = (Math.max(Math.min(cTime - lTime, 1/10), 1/240) || (1/60)) * 0.1 + lDt * 0.9;
 		lDt = dt;
 		lTime = cTime;
 
@@ -82,6 +113,8 @@ SSPS.prototype.updateViewport = function() {
 	if (this.vpw !== window.innerWidth || this.vph !== window.innerHeight) {
 		this.vpw = window.innerWidth;
 		this.vph = window.innerHeight;
+		this.canvas.width = this.vpw;
+		this.canvas.height = this.vph;
 	}
 
 }
