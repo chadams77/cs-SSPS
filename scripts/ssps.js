@@ -193,7 +193,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
         var ret = [mvx, mvy, mvz];
 
         for (var i=0; i<this.constants.PCOUNT; i++) {
-            if (abs(i - me) > 0.01) {
+            if (Math.abs(i - me) > 0.01) {
                 var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
                 var ovel = [velocities[i*3], velocities[i*3+1], velocities[i*3+2]];
                 var mass = oMass;
@@ -448,6 +448,93 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
             var int = 0.1;
             var intr = 0.0;
+            var msl = 0.0;
+            var mst = -1.;
+            var ms0 = [0., 0., 0.];
+            var msr = -1;
+
+            for (var i=0; i<this.constants.PCOUNT; i++) {
+                var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
+                var sr = attrs[i * 6 + 0] * 3.;
+                if (sr > 0.0) {
+                    var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
+                    if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
+                        var l = 0.01 + (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
+                        l = Math.pow(l-0.1, 0.2)*3.;
+                        if (l > 0.75) {
+                            ms0 = s0;
+                            msr = sr;
+                            msl = l;
+                            mst = attrs[i * 6 + 5];
+                            minDist = ab[0];
+                        }
+                    }
+                }
+            }
+
+            var outClr = [
+                Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
+                Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
+                Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
+            ];
+
+            if (minDist >= 0.0) {
+                if (mst > 0.5) {
+                    intr = Math.max(intr, msl) * 0.5;
+                }
+                else {
+                    int = Math.max(int, msl) * 0.5;
+                }
+                var nr0 = [ray0[0] + rayDir[0] * minDist, ray0[1] + rayDir[1] * minDist, ray0[2] + rayDir[2] * minDist];
+                var norm = [ms0[0] - nr0[0], ms0[1] - nr0[1], ms0[2] - nr0[2]];
+                var nrDir = [0, 0, 0]; nrDir = refractWrap(rayDir, norm, 1/1.5);
+                var dot = Math.max(0., -(nrDir[0] * rayDir[0] + nrDir[1] * rayDir[1] + nrDir[2] * rayDir[2]));
+                var light = Math.pow(1. - dot, 6.0);
+                outClr[1] = light;
+                int += light;
+                intr += light;
+            }
+
+            outClr[2] = int;
+            outClr[0] = intr;
+
+            this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
+
+        }, {
+            graphical: true,
+            constants: {
+                RSIZE: this.RSIZE,
+                PCOUNT: this.PCOUNT,
+            },
+            output: [this.RSIZE, this.RSIZE],
+            paramTypes: {
+                particles: 'NumberTexture',
+                attrs: 'NumberTexture',
+                camCenter: 'Array(3)',
+                camDir: 'Array(3)',
+                camUp: 'Array(3)',
+                camNearWidth: 'Number',
+                camFarWidth: 'Number',
+                camDist: 'Number'
+            }
+        }),
+        this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
+
+            var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
+
+            var CC = [camCenter[0], camCenter[1], camCenter[2]],
+                CD = [camDir[0], camDir[1], camDir[2]],
+                CU = [camUp[0], camUp[1], camUp[2]];
+
+            var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+            var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
+
+            this.color(0., 0., 0., 1.);
+
+            var minDist = -1.0;
+
+            var int = 0.1;
+            var intr = 0.0;
 
             var ms0 = [0., 0., 0.];
             var msr = -1;
@@ -566,7 +653,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
             for (var i=0; i<this.constants.PCOUNT; i++) {
                 var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                var sr = attrs[i * 6 + 0];
+                var sr = attrs[i * 6 + 0] * 2.;
                 if (sr > 0.0) {
                     var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
                     if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
@@ -605,7 +692,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
                 for (var i=0; i<this.constants.PCOUNT; i++) {
                     var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                    var sr = attrs[i * 6 + 0];
+                    var sr = attrs[i * 6 + 0] * 2.;
                     if (sr > 0.0 && distanceWrap(s0, ms0) > (sr*0.2)) {
                         var ab = [0, 0]; ab = raySphere(nr0, nrDir, s0, sr);
                         if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
@@ -747,10 +834,10 @@ window.xSSPS = function(PCOUNT, RSIZE) {
         output: [this.PCOUNT * 3]
     });
 
-    this.sDensity = [0.125, 0.25, 0.5, 1.0, 1.5, 2.0]; this.sDensityI = 2;
+    this.sDensity = [0.125, 0.25, 0.5, 1.0, 1.5, 2.0]; this.sDensityI = 3;
     this.sMass = [0.05, 0.1, 0.2, 0.4, 0.8]; this.sMassI = 2;
-    this.sIncomp = [1.0, 0.8, 0.6, 0.4, 0.2]; this.sIncompI = 1;
-    this.sVisc = [0.05, 0.1, 0.25, 0.35, 0.5, 0.75, 0.95]; this.sViscI = 3;
+    this.sIncomp = [1.0, 0.8, 0.6, 0.4, 0.2]; this.sIncompI = 3;
+    this.sVisc = [0.05, 0.1, 0.25, 0.35, 0.5, 0.75, 0.95]; this.sViscI = 0;
 
     const seedAttrs = this.gpu.createKernel(function(){
         var comp = this.thread.x % 6;
@@ -806,8 +893,8 @@ window.xSSPS = function(PCOUNT, RSIZE) {
      */ 
     this.reset = () => {
         this.cam = {
-            p: {x: 0, y: 0, z: 0},
-            dir: {x: 1, y: 0, z: 0},
+            p: {x: 0, y: 0, z: 20},
+            dir: {x: 0, y: 0, z: -1},
             up: {x: 0, y: 1, z: 0},
             nearW: 0.0001,
             farW: 1000,

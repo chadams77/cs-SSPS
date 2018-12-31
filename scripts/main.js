@@ -52,7 +52,7 @@ SSPS.prototype.updateRender = function(dt) {
     lines.push('SSPS by Chadams - ' + Math.round(1 / dt) + ' fps - ' + this.psim.PCOUNT + ' particles @ ' + this.psim.RSIZE + 'x' + this.psim.RSIZE);
     lines.push('[W] - Forward, [S] - Reverse, [ARROWS] - Look');
     lines.push('[E] - Grab, [SPACE] - Shoot Particle');
-    lines.push('[R] - Cycle Render Mode: ' + mkOpt([1, 2, 3], this.psim.renderMode));
+    lines.push('[R] - Cycle Render Mode: ' + mkOpt([1, 2, 3, 4], this.psim.renderMode));
     lines.push('[1] - Cycle Particle Density: ' + mkOpt(this.psim.sDensity, this.psim.sDensityI));
     lines.push('[2] - Cycle Particle Viscosity: ' + mkOpt(this.psim.sVisc, this.psim.sViscI));
     lines.push('[3] - Cycle Particle Mass: ' + mkOpt(this.psim.sMass, this.psim.sMassI));
