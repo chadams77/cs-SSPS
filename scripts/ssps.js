@@ -238,6 +238,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
             gConst: this.gConst,
             restDensity: ((4 / 3) * Math.PI * Math.pow(this.fieldLen, 3)) * this.restDensity
         },
+        loopMaxIterations: this.PCOUNT,
         output: [ this.PCOUNT*3 ],
         outputToTexture: true,
         paramTypes: {
@@ -263,9 +264,10 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 return list[this.thread.x];
             }
         }, {
-            output: [ this.PCOUNT*3 ],
+            output: [ this.PCOUNT*pitch ],
             outputToTexture: true,
             constants: { PCOUNT: this.PCOUNT, pitch },
+            loopMaxIterations: this.PCOUNT,
             paramTypes: {
                 list: 'NumberTexture',
                 index: 'Number',
@@ -287,6 +289,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
     }, {
         output: [ this.PCOUNT*3 ],
         outputToTexture: true,
+        loopMaxIterations: this.PCOUNT,
         paramTypes: {
             particles: 'NumberTexture',
             velocities: 'NumberTexture',
@@ -419,6 +422,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 RSIZE: this.RSIZE,
                 PCOUNT: this.PCOUNT,
             },
+            loopMaxIterations: this.PCOUNT,
             output: [this.RSIZE, this.RSIZE],
             paramTypes: {
                 particles: 'NumberTexture',
@@ -444,29 +448,40 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
             this.color(0., 0., 0., 1.);
 
-            var minDist = -1.0;
+            var minDist = -1.0, minDist2 = -1.0, minDist3 = -1.0;
 
             var int = 0.1;
             var intr = 0.0;
             var msl = 0.0;
             var mst = -1.;
             var ms0 = [0., 0., 0.];
-            var msr = -1;
+            var ms02 = [0., 0., 0.];
+            var ms03 = [0., 0., 0.];
+            var msr = -1., msr2 = -1., msr3 = -1.;
 
             for (var i=0; i<this.constants.PCOUNT; i++) {
                 var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                var sr = attrs[i * 6 + 0] * 3.;
+                var sr = attrs[i * 6 + 0] * 2.;
                 if (sr > 0.0) {
                     var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
-                    if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
-                        var l = 0.01 + (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
-                        l = Math.pow(l-0.1, 0.2)*3.;
-                        if (l > 0.75) {
-                            ms0 = s0;
-                            msr = sr;
-                            msl = l;
+                    if (ab[0] >= 0.0) {
+                        if (ab[0] < minDist || minDist < 0.) {
+                            ms03 = ms02; ms02 = ms0;
+                            msr3 = msr2; msr2 = msr;
+                            minDist3 = minDist2; minDist2 = minDist;
+                            ms0 = s0; msr = sr; msl = 1.0;
                             mst = attrs[i * 6 + 5];
                             minDist = ab[0];
+                        }
+                        else if (ab[0] < minDist2 || minDist2 < 0.) {
+                            ms03 = ms02; ms02 = s0;
+                            msr3 = msr2; msr2 = sr;
+                            minDist3 = minDist2; minDist2 = ab[0];
+                        }
+                        else if (ab[0] < minDist3 || minDist3 < 0.) {
+                            ms03 = s0;
+                            msr3 = sr;
+                            minDist3 = ab[0];
                         }
                     }
                 }
@@ -478,6 +493,8 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
             ];
 
+            const nrd = msr * 0.2;
+
             if (minDist >= 0.0) {
                 if (mst > 0.5) {
                     intr = Math.max(intr, msl) * 0.5;
@@ -487,12 +504,29 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 }
                 var nr0 = [ray0[0] + rayDir[0] * minDist, ray0[1] + rayDir[1] * minDist, ray0[2] + rayDir[2] * minDist];
                 var norm = [ms0[0] - nr0[0], ms0[1] - nr0[1], ms0[2] - nr0[2]];
-                var nrDir = [0, 0, 0]; nrDir = refractWrap(rayDir, norm, 1/1.5);
+                var count = 1.0;
+                if (minDist2 >= 0.0 && Math.abs(minDist2 - minDist) < nrd) {
+                    var T = 1. - Math.pow(Math.abs(minDist2 - minDist) / nrd, 0.5);
+                    norm[0] += (ms02[0] - nr0[0]) * T;
+                    norm[1] += (ms02[1] - nr0[1]) * T;
+                    norm[2] += (ms02[2] - nr0[2]) * T;
+                    count += T;
+                }
+                if (minDist3 >= 0.0 && Math.abs(minDist3 - minDist) < nrd) {
+                    var T = 1. - Math.pow(Math.abs(minDist2 - minDist) / nrd, 0.5);
+                    norm[0] += (ms03[0] - nr0[0]) * T;
+                    norm[1] += (ms03[1] - nr0[1]) * T;
+                    norm[2] += (ms03[2] - nr0[2]) * T;
+                    count += T;
+                }
+                norm[0] /= count;
+                norm[1] /= count;
+                norm[2] /= count;
+                var nrDir = [0, 0, 0]; nrDir = reflectWrap(rayDir, norm);
                 var dot = Math.max(0., -(nrDir[0] * rayDir[0] + nrDir[1] * rayDir[1] + nrDir[2] * rayDir[2]));
-                var light = Math.pow(1. - dot, 6.0);
-                outClr[1] = light;
-                int += light;
-                intr += light;
+                var light = 1.0 + Math.pow(dot, 2.0);
+                int *= light;
+                intr *= light;
             }
 
             outClr[2] = int;
@@ -506,6 +540,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 RSIZE: this.RSIZE,
                 PCOUNT: this.PCOUNT,
             },
+            loopMaxIterations: this.PCOUNT,
             output: [this.RSIZE, this.RSIZE],
             paramTypes: {
                 particles: 'NumberTexture',
@@ -615,6 +650,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 RSIZE: this.RSIZE,
                 PCOUNT: this.PCOUNT,
             },
+            loopMaxIterations: this.PCOUNT,
             output: [this.RSIZE, this.RSIZE],
             paramTypes: {
                 particles: 'NumberTexture',
@@ -761,6 +797,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 RSIZE: this.RSIZE,
                 PCOUNT: this.PCOUNT,
             },
+            loopMaxIterations: this.PCOUNT,
             output: [this.RSIZE, this.RSIZE],
             paramTypes: {
                 particles: 'NumberTexture',
@@ -937,30 +974,33 @@ xSSPS.prototype.updateRender = function(keys, dt) {
 
     this.handleInput(keys, dt);
 
-    // Update velocities via gravity & pressure
     this.sDensityI = this.sDensityI % this.sDensity.length;
     this.sViscI = this.sViscI % this.sVisc.length;
     this.sMassI = this.sMassI % this.sMass.length;
     this.sIncompI = this.sIncompI % this.sIncomp.length;
-    this.data.vel = this.velocityKernel(
-        this.data.pos,
-        this.velCoppier(this.data.vel),
-        this.data.attr,
-        this.move.tPull,
-        [this.cam.p.x + this.cam.dir.x * this.move.tPullR, this.cam.p.y + this.cam.dir.y * this.move.tPullR, this.cam.p.z + this.cam.dir.z * this.move.tPullR],
-        this.sDensity[this.sDensityI],
-        this.sVisc[this.sViscI],
-        this.sMass[this.sMassI],
-        this.sIncomp[this.sIncompI],
-        dt
-    );
 
-    // Update positions
-    this.data.pos = this.positionKernel(
-        this.posCoppier(this.data.pos),
-        this.data.vel,
-        dt
-    );
+    for (let i=0; i<5; i++) {
+        // Update velocities via gravity & pressure
+        this.data.vel = this.velocityKernel(
+            this.data.pos,
+            this.velCoppier(this.data.vel),
+            this.data.attr,
+            this.move.tPull,
+            [this.cam.p.x + this.cam.dir.x * this.move.tPullR, this.cam.p.y + this.cam.dir.y * this.move.tPullR, this.cam.p.z + this.cam.dir.z * this.move.tPullR],
+            this.sDensity[this.sDensityI],
+            this.sVisc[this.sViscI],
+            this.sMass[this.sMassI],
+            this.sIncomp[this.sIncompI],
+            dt / 5
+        );
+
+        // Update positions
+        this.data.pos = this.positionKernel(
+            this.posCoppier(this.data.pos),
+            this.data.vel,
+            dt / 5
+        );
+    }
 
     // Render
     this.renderMode = this.renderMode % this.renderKernel.length;
