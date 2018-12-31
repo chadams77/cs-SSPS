@@ -10,28 +10,6 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	this.shootIndex = 0;
 	this.lkeys = {};
 
-	this.cam = {
-		p: {x: 0, y: 0, z: 0},
-		dir: {x: 1, y: 0, z: 0},
-		up: {x: 0, y: 1, z: 0},
-		nearW: 0.0001,
-		farW: 1000,
-		farDist: 1000
-	};
-
-	this.move = {
-		toLR: 0,
-		toUD: 0,
-		toFR: 0,
-		tLR: 0,
-		tUD: 0,
-		tFR: 0,
-		toPull: 0,
-		tPull: 0,
-		toPullR: 0,
-		tPullR: 0
-	};
-	
 	this.canvas = document.createElement('canvas');
 	this.ctx3d = this.canvas.getContext('webgl');
 	this.gpu = new GPU({
@@ -169,7 +147,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		VELOCITY UPDATE KERNEL
 	 */
 
-	this.velocityKernel = this.gpu.createKernel(function(positions, velocities, attrs, pullMass, playerPos, dt) {
+	this.velocityKernel = this.gpu.createKernel(function(positions, velocities, attrs, pullMass, playerPos, oDensity, oVisc, oMass, oIncomp, dt) {
 
 		// Unpack particle
 		var comp = this.thread.x % 3;
@@ -182,17 +160,17 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			mvy = velocities[me*3+1],
 		    mvz = velocities[me*3+2];
 		var mvel = [mvx, mvy, mvz];
-		var mdensity = attrs[me*6+1];
-		var mmass = attrs[me*6+2];
-		var incomp = attrs[me*6+3];
-		var viscdt = attrs[me*6+4];
+		var mdensity = oDensity;
+		var mmass = oMass;
+		var incomp = oIncomp;
+		var viscdt = oVisc;
 		var ddensity = 0.0,
 			nddensity = 0.0;
 
 		// Compute pressure on this particle
 		for (var i=0; i<this.constants.PCOUNT; i++) {
 			var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
-			var density = attrs[i*6+1];
+			var density = oDensity;
 			var dret = [0, 0]; dret = partDensity(mpos, opos, this.constants.fieldLen);
 			ddensity += dret[0] * density;
 			nddensity += dret[1] * density;
@@ -218,7 +196,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			if (abs(i - me) > 0.01) {
 				var opos = [positions[i*3], positions[i*3+1], positions[i*3+2]];
 				var ovel = [velocities[i*3], velocities[i*3+1], velocities[i*3+2]];
-				var mass = attrs[i*6+2];
+				var mass = oMass;
 				var jmf = (2. * mass) / (mass + mmass);
 				var dret = [0., 0., 0.]; dret = pressForce(mpos, opos, mvel, ovel, this.constants.fieldLen, dt, spressure, snpressure, viscdt);
 				ret[0] += dret[0] * jmf; ret[1] += dret[1] * jmf; ret[2] += dret[2] * jmf;
@@ -769,6 +747,11 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 		output: [this.PCOUNT * 3]
 	});
 
+	this.sDensity = [0.125, 0.25, 0.5, 1.0, 1.5, 2.0]; this.sDensityI = 2;
+	this.sMass = [0.05, 0.1, 0.2, 0.4, 0.8]; this.sMassI = 2;
+	this.sIncomp = [1.0, 0.8, 0.6, 0.4, 0.2]; this.sIncompI = 1;
+	this.sVisc = [0.05, 0.1, 0.25, 0.35, 0.5, 0.75, 0.95]; this.sViscI = 3;
+
 	const seedAttrs = this.gpu.createKernel(function(){
 		var comp = this.thread.x % 6;
 		if (comp < 0.01) {
@@ -784,8 +767,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 			return 0.8; // incompress
 		}
 		else if (comp < 4.01) {
-			// visc
-			return 0.35;
+			return 0.35; // visc
 		}
 		else {
 			// type
@@ -822,11 +804,37 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 	/*
 	 * Seed Particles
 	 */ 
-	this.data = {
-		pos: seedPositions(),
-		vel: seedVelocities(),
-		attr: seedAttrs()
+	this.reset = () => {
+		this.cam = {
+			p: {x: 0, y: 0, z: 0},
+			dir: {x: 1, y: 0, z: 0},
+			up: {x: 0, y: 1, z: 0},
+			nearW: 0.0001,
+			farW: 1000,
+			farDist: 1000
+		};
+
+		this.move = {
+			toLR: 0,
+			toUD: 0,
+			toFR: 0,
+			tLR: 0,
+			tUD: 0,
+			tFR: 0,
+			toPull: 0,
+			tPull: 0,
+			toPullR: 0,
+			tPullR: 0
+		};
+
+		this.data = {
+			pos: seedPositions(),
+			vel: seedVelocities(),
+			attr: seedAttrs()
+		};
 	};
+
+	this.reset();
 
 	/*
 		Make coppiers
@@ -843,12 +851,20 @@ xSSPS.prototype.updateRender = function(keys, dt) {
 	this.handleInput(keys, dt);
 
 	// Update velocities via gravity & pressure
+	this.sDensityI = this.sDensityI % this.sDensity.length;
+	this.sViscI = this.sViscI % this.sVisc.length;
+	this.sMassI = this.sMassI % this.sMass.length;
+	this.sIncompI = this.sIncompI % this.sIncomp.length;
 	this.data.vel = this.velocityKernel(
 		this.data.pos,
 		this.velCoppier(this.data.vel),
 		this.data.attr,
 		this.move.tPull,
 		[this.cam.p.x + this.cam.dir.x * this.move.tPullR, this.cam.p.y + this.cam.dir.y * this.move.tPullR, this.cam.p.z + this.cam.dir.z * this.move.tPullR],
+		this.sDensity[this.sDensityI],
+		this.sVisc[this.sViscI],
+		this.sMass[this.sMassI],
+		this.sIncomp[this.sIncompI],
 		dt
 	);
 
@@ -897,6 +913,21 @@ xSSPS.prototype.handleInput = function(keys, dt) {
 
 	if (this.lkeys[82] && !keys[82]) {
 		this.renderMode += 1;
+	}
+	if (this.lkeys[27] && !keys[27]) {
+		this.reset();
+	}
+	if (this.lkeys[49] && !keys[49]) {
+		this.sDensityI += 1;
+	}
+	if (this.lkeys[50] && !keys[50]) {
+		this.sViscI += 1;
+	}
+	if (this.lkeys[51] && !keys[51]) {
+		this.sMassI += 1;
+	}
+	if (this.lkeys[52] && !keys[52]) {
+		this.sIncompI += 1;
 	}
 
 	if (this.lkeys[32] && !keys[32]) {

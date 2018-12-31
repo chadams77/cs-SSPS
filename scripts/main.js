@@ -35,12 +35,31 @@ SSPS.prototype.updateRender = function(dt) {
 
 	const lines = [];
 
-	lines.push('SSPS - ' + Math.round(1 / dt) + ' fps - ' + this.psim.PCOUNT + ' particles @ ' + this.psim.RSIZE + 'x' + this.psim.RSIZE);
+	const mkOpt = (lst, i) => {
+		i = i % lst.length;
+		let ret = '';
+		for (let j=0; j<lst.length; j++) {
+			if (j === i) {
+				ret += '>>' + lst[j] + '<< ';
+			}
+			else {
+				ret += ' ' + lst[j] + ' ';
+			}
+		}
+		return ret;
+	};
+
+	lines.push('SSPS by Chadams - ' + Math.round(1 / dt) + ' fps - ' + this.psim.PCOUNT + ' particles @ ' + this.psim.RSIZE + 'x' + this.psim.RSIZE);
 	lines.push('[W] - Forward, [S] - Reverse, [ARROWS] - Look');
 	lines.push('[E] - Grab, [SPACE] - Shoot Particle');
-	lines.push('[R] - Cycle Render Mode (' + (this.psim.renderMode+1) + ' / ' + this.psim.renderKernel.length + ')');
+	lines.push('[R] - Cycle Render Mode: ' + mkOpt([1, 2, 3], this.psim.renderMode));
+	lines.push('[1] - Cycle Particle Density: ' + mkOpt(this.psim.sDensity, this.psim.sDensityI));
+	lines.push('[2] - Cycle Particle Viscosity: ' + mkOpt(this.psim.sVisc, this.psim.sViscI));
+	lines.push('[3] - Cycle Particle Mass: ' + mkOpt(this.psim.sMass, this.psim.sMassI));
+	lines.push('[4] - Cycle Particle Incompressiveness: ' + mkOpt(this.psim.sIncomp, this.psim.sIncompI));
+	lines.push('[ESC] - Reset Particles & Camera')
 
-	const fs = 15;
+	const fs = 14;
 	const x = this.vpw*0.5 - this.vph*0.5 + 20;
 	let y = 20 + (fs * 0.9);
 	this.ctx.textAlign = 'left';
