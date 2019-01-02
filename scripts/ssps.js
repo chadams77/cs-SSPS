@@ -3,9 +3,17 @@ window.xSSPS = function(PCOUNT, RSIZE) {
     this.RSIZE = RSIZE || 512;
     this.PCOUNT = PCOUNT || 512;
 
+    this.hashLength = 128;
+    this.hashWSize = 3.0;
+    this.hashBinLen = 128;
+    this.rayCount = 128;
+    this.rayDist = 20;
+    this.rfScale = 2.0;
+
     this.restDensity = 0.1;
     this.fieldLen = 4;
     this.gConst = 0.02;
+    this.bound = 15;
 
     this.shootIndex = 0;
     this.lkeys = {};
@@ -222,6 +230,28 @@ window.xSSPS = function(PCOUNT, RSIZE) {
             ret[0] += dret[0]; ret[1] += dret[1]; ret[2] += dret[2];
         }
 
+        // Enforce scene boundaries
+        if (ret[0] < 0 && mpos[0] < -this.constants.bound) {
+            ret[0] = -ret[0];
+        }
+        else if (ret[0] > 0 && mpos[0] > this.constants.bound) {
+            ret[0] = -ret[0];
+        }
+
+        if (ret[1] < 0 && mpos[1] < -this.constants.bound) {
+            ret[1] = -ret[1];
+        }
+        else if (ret[1] > 0 && mpos[1] > this.constants.bound) {
+            ret[1] = -ret[1];
+        }
+
+        if (ret[2] < 0 && mpos[2] < -this.constants.bound) {
+            ret[2] = -ret[2];
+        }
+        else if (ret[2] > 0 && mpos[2] > this.constants.bound) {
+            ret[2] = -ret[2];
+        }
+
         if (comp < 0.01) {
             return ret[0];
         }
@@ -234,6 +264,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
     }, {
         constants: {
             PCOUNT: this.PCOUNT,
+            bound: this.bound,
             fieldLen: this.fieldLen,
             gConst: this.gConst,
             restDensity: ((4 / 3) * Math.PI * Math.pow(this.fieldLen, 3)) * this.restDensity
@@ -334,10 +365,10 @@ window.xSSPS = function(PCOUNT, RSIZE) {
         RENDER KERNEL
      */
     
-    this.renderMode = 1;
+    this.renderMode = 0;
     
     this.renderKernel = [
-        this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
+        this.gpu.createKernel(function(hash, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
 
             var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
 
@@ -348,84 +379,107 @@ window.xSSPS = function(PCOUNT, RSIZE) {
             var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
             var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
 
+            var oray0 = [ray0[0], ray0[1], ray0[2]];
+
             this.color(0., 0., 0., 1.);
 
-            var minDist = -1.0;
+            var outClr = [
+                0., 0., 0.
+            ];
 
-            var int = 0.1;
-            var intr = 0.0;
+            var int = 0., light = 0.;
 
-            for (var i=0; i<this.constants.PCOUNT; i++) {
-                var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                var sr = attrs[i * 6 + 0];
-                if (sr > 0.0) {
-                    var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
-                    if (ab[0] >= 0.0) {
-                        var l = 0.01 + (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 2.0);
-                        if (attrs[i * 6 + 5] > 0.5) {
-                            intr += Math.pow(l, 0.5);
+            var stepR = this.constants.rayDist / this.constants.rayCount;
+            var max2 = Math.floor(this.constants.bound * 2.);
+            var found = -1.0;
+            var norm = [0., 0., 0.];
+            ray0[0] += rayDir[0] * stepR * 10.;
+            ray0[1] += rayDir[1] * stepR * 10.;
+            ray0[2] += rayDir[2] * stepR * 10.;
+            for (var i=0; i<this.constants.rayCount; i++) {
+                if (found < 0.) {
+                    ray0[0] += rayDir[0] * stepR;
+                    ray0[1] += rayDir[1] * stepR;
+                    ray0[2] += rayDir[2] * stepR;
+
+                    var ix = (Math.floor(ray0[0]/this.constants.hashWSize)) + max2,
+                        iy = (Math.floor(ray0[1]/this.constants.hashWSize)) + max2, 
+                        iz = (Math.floor(ray0[2]/this.constants.hashWSize)) + max2; 
+                    var k = (Math.round(ix * 137.) + Math.round(iy * 197.) + Math.round(iz * 167.)) % this.constants.hashLength;
+
+                    var fq = 0.0;
+
+                    norm[0] = 0.;
+                    norm[1] = 0.;
+                    norm[2] = 0.;
+
+                    var off = Math.round(k * this.constants.hashBinLen * 4.);
+                    var endj = -1.0;
+                    for (var j=0; j<this.constants.hashBinLen; j++) {
+                        if (endj < 0.) {
+                            if (hash[off+3.] < 0.5) {
+                                endj = 1.0;
+                            }
+                            else {
+                                var dx = hash[off], dy = hash[off+1.], dz = hash[off+2.];
+                                dx -= ray0[0]; dy -= ray0[1]; dz -= ray0[2];
+                                var r = dx*dx + dy*dy + dz*dz;
+                                if (r > 0.0) {
+                                    dx /= r;
+                                    dy /= r;
+                                    dz /= r;
+
+                                    r = Math.sqrt(r);
+                                    r /= this.constants.rfScale;
+                                    if (r <= 0.707) {
+                                        var q = (r*r*r*r - r*r + 0.25);
+                                        norm[0] += dx*q;
+                                        norm[1] += dy*q;
+                                        norm[2] += dz*q;
+                                        fq += q;
+                                    }
+                                }
+                                off += 4.;
+                            }
                         }
-                        else {
-                            int += l;
-                        }
+                    }
+
+                    if (fq > 0.175) {
+                        norm[0] /= fq;
+                        norm[1] /= fq;
+                        norm[2] /= fq;
+                        var ref = [0, 0, 0]; ref = refractWrap(norm, oray0, 1./1.5);
+                        var dot = ref[0] * rayDir[0] + ref[1] * rayDir[1] + ref[2] * rayDir[2];
+                        int = (1. - Math.pow(i / this.constants.rayCount, 3.0)) * 0.7;
+                        light = Math.min(1., Math.max(dot*dot*dot*dot, 0.)) * int;
+                        found = 1.0;
                     }
                 }
             }
 
-            var outClr = [
-                Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
-            ];
-
-            if (int > 0.01 && int < 0.25) {
-                outClr[2] = int;
-            }
-            else if (int < 0.5) {
-                outClr[1] = (int-0.25)/0.25;
-                outClr[2] = 1.;
-            }
-            else if (int < 1.0) {
-                outClr[0] = (int-0.5)/0.5;
-                outClr[1] = 1.;
-                outClr[2] = 1.;
-            }
-            else {
-                outClr[0] = 1.;
-                outClr[1] = 1.;
-                outClr[2] = 1.;
-            }
-
-            if (intr < 0.25) {
-                outClr[0] = intr;
-            }
-            else if (intr < 0.5) {
-                outClr[1] += (intr-0.25)/0.25;
-                outClr[0] += 1.;
-            }
-            else if (intr < 1.0) {
-                outClr[2] += (intr-0.5)/0.5;
-                outClr[1] += 1.;
-                outClr[0] += 1.;
-            }
-            else {
-                outClr[2] += 1.;
-                outClr[1] += 1.;
-                outClr[0] += 1.;
-            }
+            outClr[2] = int + light;
+            outClr[1] = light;
+            outClr[0] = light;
 
             this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
 
         }, {
             graphical: true,
             constants: {
+                hashLength: this.hashLength,
+                hashWSize: this.hashWSize,
+                hashBinLen: this.hashBinLen,
+                rayCount: this.rayCount,
+                rayDist: this.rayDist,
+                rfScale: this.rfScale,
+                bound: this.bound,
                 RSIZE: this.RSIZE,
                 PCOUNT: this.PCOUNT,
             },
-            loopMaxIterations: this.PCOUNT,
+            loopMaxIterations: this.rayCount * this.hashBinLen,
             output: [this.RSIZE, this.RSIZE],
             paramTypes: {
-                particles: 'NumberTexture',
+                hash: 'Array',
                 attrs: 'NumberTexture',
                 camCenter: 'Array(3)',
                 camDir: 'Array(3)',
@@ -435,7 +489,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 camDist: 'Number'
             }
         }),
-        this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
+        this.gpu.createKernel(function(hash, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
 
             var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
 
@@ -446,104 +500,181 @@ window.xSSPS = function(PCOUNT, RSIZE) {
             var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
             var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
 
+            var oray0 = [ray0[0], ray0[1], ray0[2]];
+
             this.color(0., 0., 0., 1.);
 
-            var minDist = -1.0, minDist2 = -1.0, minDist3 = -1.0;
+            var outClr = [
+                0., 0., 0.
+            ];
 
-            var int = 0.1;
-            var intr = 0.0;
-            var msl = 0.0;
-            var mst = -1.;
-            var ms0 = [0., 0., 0.];
-            var ms02 = [0., 0., 0.];
-            var ms03 = [0., 0., 0.];
-            var msr = -1., msr2 = -1., msr3 = -1.;
+            var int = 0., light = 0.;
 
-            for (var i=0; i<this.constants.PCOUNT; i++) {
-                var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                var sr = attrs[i * 6 + 0] * 2.;
-                if (sr > 0.0) {
-                    var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
-                    if (ab[0] >= 0.0) {
-                        if (ab[0] < minDist || minDist < 0.) {
-                            ms03 = ms02; ms02 = ms0;
-                            msr3 = msr2; msr2 = msr;
-                            minDist3 = minDist2; minDist2 = minDist;
-                            ms0 = s0; msr = sr; msl = 1.0;
-                            mst = attrs[i * 6 + 5];
-                            minDist = ab[0];
+            var stepR = this.constants.rayDist / this.constants.rayCount;
+            var max2 = Math.floor(this.constants.bound * 2.);
+            var found = -1.0;
+            var norm = [0., 0., 0.];
+            ray0[0] += rayDir[0] * stepR * 10.;
+            ray0[1] += rayDir[1] * stepR * 10.;
+            ray0[2] += rayDir[2] * stepR * 10.;
+            for (var i=0; i<this.constants.rayCount; i++) {
+                if (found < 0.) {
+                    ray0[0] += rayDir[0] * stepR;
+                    ray0[1] += rayDir[1] * stepR;
+                    ray0[2] += rayDir[2] * stepR;
+
+                    var ix = (Math.floor(ray0[0]/this.constants.hashWSize)) + max2,
+                        iy = (Math.floor(ray0[1]/this.constants.hashWSize)) + max2, 
+                        iz = (Math.floor(ray0[2]/this.constants.hashWSize)) + max2; 
+                    var k = (Math.round(ix * 137.) + Math.round(iy * 197.) + Math.round(iz * 167.)) % this.constants.hashLength;
+
+                    var fq = 0.0;
+
+                    norm[0] = 0.;
+                    norm[1] = 0.;
+                    norm[2] = 0.;
+
+                    var off = Math.round(k * this.constants.hashBinLen * 4.);
+                    var endj = -1.0;
+                    for (var j=0; j<this.constants.hashBinLen; j++) {
+                        if (endj < 0.) {
+                            if (hash[off+3.] < 0.5) {
+                                endj = 1.0;
+                            }
+                            else {
+                                var dx = hash[off], dy = hash[off+1.], dz = hash[off+2.];
+                                dx -= ray0[0]; dy -= ray0[1]; dz -= ray0[2];
+                                var r = dx*dx + dy*dy + dz*dz;
+                                if (r > 0.0) {
+                                    dx /= r;
+                                    dy /= r;
+                                    dz /= r;
+
+                                    r = Math.sqrt(r);
+                                    r /= this.constants.rfScale;
+                                    if (r <= 0.707) {
+                                        var q = (r*r*r*r - r*r + 0.25);
+                                        norm[0] += dx*q;
+                                        norm[1] += dy*q;
+                                        norm[2] += dz*q;
+                                        fq += q;
+                                    }
+                                }
+                                off += 4.;
+                            }
                         }
-                        else if (ab[0] < minDist2 || minDist2 < 0.) {
-                            ms03 = ms02; ms02 = s0;
-                            msr3 = msr2; msr2 = sr;
-                            minDist3 = minDist2; minDist2 = ab[0];
-                        }
-                        else if (ab[0] < minDist3 || minDist3 < 0.) {
-                            ms03 = s0;
-                            msr3 = sr;
-                            minDist3 = ab[0];
-                        }
+                    }
+
+                    if (fq > 0.175) {
+                        norm[0] /= fq;
+                        norm[1] /= fq;
+                        norm[2] /= fq;
+                        var ref = [0, 0, 0]; ref = refractWrap(norm, oray0, 1./1.5);
+                        var dot = ref[0] * rayDir[0] + ref[1] * rayDir[1] + ref[2] * rayDir[2];
+                        int = (1. - Math.pow(i / this.constants.rayCount, 3.0)) * 0.7;
+                        light = Math.min(1., Math.max(dot*dot*dot*dot, 0.)) * int;
+                        found = 1.0;
                     }
                 }
             }
 
-            var outClr = [
-                Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
-            ];
+            outClr[2] = int + light;
+            outClr[1] = light;
+            outClr[0] = light;
 
-            const nrd = msr * 0.2;
+            if (found > 0.) {
+                found = -1.;
+                var nrayDir = [-norm[0], -norm[1], -norm[2]];
+                var nstepR = this.constants.rayDistRef / this.constants.rayCountRef;
+                for (var i=0; i<this.constants.rayCountRef; i++) {
+                    if (found < 0.) {
+                        ray0[0] += nrayDir[0] * nstepR;
+                        ray0[1] += nrayDir[1] * nstepR;
+                        ray0[2] += nrayDir[2] * nstepR;
 
-            if (minDist >= 0.0) {
-                if (mst > 0.5) {
-                    intr = Math.max(intr, msl) * 0.5;
+                        var ix = (Math.floor(ray0[0]/this.constants.hashWSize)) + max2,
+                            iy = (Math.floor(ray0[1]/this.constants.hashWSize)) + max2, 
+                            iz = (Math.floor(ray0[2]/this.constants.hashWSize)) + max2; 
+                        var k = (Math.round(ix * 137.) + Math.round(iy * 197.) + Math.round(iz * 167.)) % this.constants.hashLength;
+
+                        var fq = 0.0;
+
+                        norm[0] = 0.;
+                        norm[1] = 0.;
+                        norm[2] = 0.;
+
+                        var off = Math.round(k * this.constants.hashBinLen * 4.);
+                        var endj = -1.0;
+                        for (var j=0; j<this.constants.hashBinLen; j++) {
+                            if (endj < 0.) {
+                                if (hash[off+3.] < 0.5) {
+                                    endj = 1.0;
+                                }
+                                else {
+                                    var dx = hash[off], dy = hash[off+1.], dz = hash[off+2.];
+                                    dx -= ray0[0]; dy -= ray0[1]; dz -= ray0[2];
+                                    var r = dx*dx + dy*dy + dz*dz;
+                                    if (r > 0.0) {
+                                        dx /= r;
+                                        dy /= r;
+                                        dz /= r;
+
+                                        r = Math.sqrt(r);
+                                        r /= this.constants.rfScale;
+                                        if (r <= 0.707) {
+                                            var q = (r*r*r*r - r*r + 0.25);
+                                            norm[0] += dx*q;
+                                            norm[1] += dy*q;
+                                            norm[2] += dz*q;
+                                            fq += q;
+                                        }
+                                    }
+                                    off += 4.;
+                                }
+                            }
+                        }
+
+                        if (fq > 0.175) {
+                            norm[0] /= fq;
+                            norm[1] /= fq;
+                            norm[2] /= fq;
+                            var ref = [0, 0, 0]; ref = refractWrap(norm, oray0, 1./1.5);
+                            var dot = ref[0] * rayDir[0] + ref[1] * rayDir[1] + ref[2] * rayDir[2];
+                            int = (1. - Math.pow(i / this.constants.rayCountRef, 3.0));
+                            light = Math.min(1., Math.max(dot*dot*dot*dot, 0.)) * int;
+                            found = 1.0;
+                        }
+                    }
                 }
-                else {
-                    int = Math.max(int, msl) * 0.5;
+
+                if (found > 0.) {
+                    outClr[2] += (int + light) * 0.1;
+                    outClr[1] += (light) * 0.1;
+                    outClr[0] += (light) * 0.1;
                 }
-                var nr0 = [ray0[0] + rayDir[0] * minDist, ray0[1] + rayDir[1] * minDist, ray0[2] + rayDir[2] * minDist];
-                var norm = [ms0[0] - nr0[0], ms0[1] - nr0[1], ms0[2] - nr0[2]];
-                var count = 1.0;
-                if (minDist2 >= 0.0 && Math.abs(minDist2 - minDist) < nrd) {
-                    var T = 1. - Math.pow(Math.abs(minDist2 - minDist) / nrd, 0.5);
-                    norm[0] += (ms02[0] - nr0[0]) * T;
-                    norm[1] += (ms02[1] - nr0[1]) * T;
-                    norm[2] += (ms02[2] - nr0[2]) * T;
-                    count += T;
-                }
-                if (minDist3 >= 0.0 && Math.abs(minDist3 - minDist) < nrd) {
-                    var T = 1. - Math.pow(Math.abs(minDist2 - minDist) / nrd, 0.5);
-                    norm[0] += (ms03[0] - nr0[0]) * T;
-                    norm[1] += (ms03[1] - nr0[1]) * T;
-                    norm[2] += (ms03[2] - nr0[2]) * T;
-                    count += T;
-                }
-                norm[0] /= count;
-                norm[1] /= count;
-                norm[2] /= count;
-                var nrDir = [0, 0, 0]; nrDir = reflectWrap(rayDir, norm);
-                var dot = Math.max(0., -(nrDir[0] * rayDir[0] + nrDir[1] * rayDir[1] + nrDir[2] * rayDir[2]));
-                var light = 1.0 + Math.pow(dot, 2.0);
-                int *= light;
-                intr *= light;
             }
-
-            outClr[2] = int;
-            outClr[0] = intr;
 
             this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
 
         }, {
             graphical: true,
             constants: {
+                hashLength: this.hashLength,
+                hashWSize: this.hashWSize,
+                hashBinLen: this.hashBinLen,
+                rayCount: this.rayCount,
+                rayDist: this.rayDist,
+                rayCountRef: Math.floor(this.rayCount / 4),
+                rayDistRef: Math.floor(this.rayDist / 4),
+                rfScale: this.rfScale,
+                bound: this.bound,
                 RSIZE: this.RSIZE,
                 PCOUNT: this.PCOUNT,
             },
-            loopMaxIterations: this.PCOUNT,
+            loopMaxIterations: this.rayCount * this.hashBinLen,
             output: [this.RSIZE, this.RSIZE],
             paramTypes: {
-                particles: 'NumberTexture',
+                hash: 'Array',
                 attrs: 'NumberTexture',
                 camCenter: 'Array(3)',
                 camDir: 'Array(3)',
@@ -552,264 +683,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                 camFarWidth: 'Number',
                 camDist: 'Number'
             }
-        }),
-        this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
-
-            var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
-
-            var CC = [camCenter[0], camCenter[1], camCenter[2]],
-                CD = [camDir[0], camDir[1], camDir[2]],
-                CU = [camUp[0], camUp[1], camUp[2]];
-
-            var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
-            var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
-
-            this.color(0., 0., 0., 1.);
-
-            var minDist = -1.0;
-
-            var int = 0.1;
-            var intr = 0.0;
-
-            var ms0 = [0., 0., 0.];
-            var msr = -1;
-            var msl = 0.0;
-            var mst = 0.0;
-
-            for (var i=0; i<this.constants.PCOUNT; i++) {
-                var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                var sr = attrs[i * 6 + 0];
-                if (sr > 0.0) {
-                    var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
-                    if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
-                        ms0 = s0;
-                        msr = sr;
-                        msl = (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 1.25);
-                        mst = attrs[i * 6 + 5];
-                        minDist = ab[0];
-                    }
-                }
-            }
-
-            if (minDist >= 0.) {
-                if (mst > 0.5) {
-                    intr += 2.5 * msl;
-                }
-                else {
-                    int += 2.5 * msl;
-                }
-            }
-
-            var outClr = [
-                Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
-            ];
-
-            if (int > 0.01 && int < 0.25) {
-                outClr[2] = int * 2.;
-            }
-            else if (int < 0.5) {
-                outClr[1] = (int-0.25)/0.25;
-                outClr[2] = 1.;
-            }
-            else if (int < 1.0) {
-                outClr[0] = (int-0.5)/0.5;
-                outClr[1] = 1.;
-                outClr[2] = 1.;
-            }
-            else {
-                outClr[0] = 1.;
-                outClr[1] = 1.;
-                outClr[2] = 1.;
-            }
-
-            if (intr < 0.25) {
-                outClr[0] += intr * 2.;
-            }
-            else if (intr < 0.5) {
-                outClr[1] += (intr-0.25)/0.25;
-                outClr[0] += 1.;
-            }
-            else if (intr < 1.0) {
-                outClr[2] += (intr-0.5)/0.5;
-                outClr[1] += 1.;
-                outClr[0] += 1.;
-            }
-            else {
-                outClr[2] += 1.;
-                outClr[1] += 1.;
-                outClr[0] += 1.;
-            }
-
-            this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
-
-        }, {
-            graphical: true,
-            constants: {
-                RSIZE: this.RSIZE,
-                PCOUNT: this.PCOUNT,
-            },
-            loopMaxIterations: this.PCOUNT,
-            output: [this.RSIZE, this.RSIZE],
-            paramTypes: {
-                particles: 'NumberTexture',
-                attrs: 'NumberTexture',
-                camCenter: 'Array(3)',
-                camDir: 'Array(3)',
-                camUp: 'Array(3)',
-                camNearWidth: 'Number',
-                camFarWidth: 'Number',
-                camDist: 'Number'
-            }
-        }),
-        this.gpu.createKernel(function(particles, attrs, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
-
-            var uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
-
-            var CC = [camCenter[0], camCenter[1], camCenter[2]],
-                CD = [camDir[0], camDir[1], camDir[2]],
-                CU = [camUp[0], camUp[1], camUp[2]];
-
-            var ray0 = [0,0,0]; ray0 = getRay0(uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
-            var rayDir = [0,0,0]; rayDir = getRayDir(ray0, uv, CC, CD, CU, camNearWidth, camFarWidth, camDist);
-
-            this.color(0., 0., 0., 1.);
-
-            var minDist = -1.0;
-
-            var int = 0.1;
-            var intr = 0.0;
-
-            var ms0 = [0., 0., 0.];
-            var msr = -1.0;
-            var msl = 0.0;
-            var mst = 0.0;
-            var msi = -1.0;
-
-            for (var i=0; i<this.constants.PCOUNT; i++) {
-                var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                var sr = attrs[i * 6 + 0] * 2.;
-                if (sr > 0.0) {
-                    var ab = [0, 0]; ab = raySphere(ray0, rayDir, s0, sr);
-                    if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
-                        msi = i;
-                        ms0 = s0;
-                        msr = sr;
-                        msl = (0.35 / Math.pow(1 + ab[0], 0.25))*Math.pow(ab[1]/(sr*2.), 0.9);
-                        mst = attrs[i * 6 + 5];
-                        minDist = ab[0];
-                    }
-                }
-            }
-
-            var outClr = [
-                Math.pow(Math.sin(rayDir[0] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[1] * 3.141592), 4.0) * 0.15,
-                Math.pow(Math.sin(rayDir[2] * 3.141592), 4.0) * 0.15
-            ];
-
-            if (minDist >= 0.) {
-                if (mst > 0.5) {
-                    intr += 1.5 * msl;
-                }
-                else {
-                    int += 1.5 * msl;
-                }
-
-                var nr0 = [ray0[0] + rayDir[0] * minDist, ray0[1] + rayDir[1] * minDist, ray0[2] + rayDir[2] * minDist];
-                var norm = [nr0[0] - ms0[0], nr0[1] - ms0[1], nr0[2] - ms0[2]];
-                var nrDir = [0, 0, 0]; nrDir = refractWrap(rayDir, norm, 1.0 / 1.5);
-
-                msr = -1;
-                msl = 0.0;
-                mst = 0.0;
-                minDist = -1.0;
-
-                for (var i=0; i<this.constants.PCOUNT; i++) {
-                    var s0 = [particles[i * 3 + 0], particles[i * 3 + 1], particles[i * 3 + 2]];
-                    var sr = attrs[i * 6 + 0] * 2.;
-                    if (sr > 0.0 && distanceWrap(s0, ms0) > (sr*0.2)) {
-                        var ab = [0, 0]; ab = raySphere(nr0, nrDir, s0, sr);
-                        if (ab[0] >= 0.0 && (ab[0] < minDist || minDist < 0.)) {
-                            msr = sr;
-                            msl = (0.35 / Math.pow(1 + distanceWrap(s0, ray0), 0.25))*Math.pow(ab[1]/(sr*2.), 0.9);
-                            mst = attrs[i * 6 + 5];
-                            minDist = ab[0];
-                        }
-                    }
-                }
-
-                if (minDist >= 0.) {
-                    if (mst > 0.5) {
-                        intr += 0.5 * msl;
-                    }
-                    else {
-                        int += 0.5 * msl;
-                    }
-                    outClr[0] += Math.pow(Math.sin(nrDir[0] * 3.141592), 4.0) * 0.15 * 0.5;
-                    outClr[1] += Math.pow(Math.sin(nrDir[1] * 3.141592), 4.0) * 0.15 * 0.5;
-                    outClr[2] += Math.pow(Math.sin(nrDir[2] * 3.141592), 4.0) * 0.15 * 0.5;
-                }
-            }
-
-            if (int > 0.01 && int < 0.25) {
-                outClr[2] = int * 2.;
-            }
-            else if (int < 0.5) {
-                outClr[1] = (int-0.25)/0.25;
-                outClr[2] = 1.;
-            }
-            else if (int < 1.0) {
-                outClr[0] = (int-0.5)/0.5;
-                outClr[1] = 1.;
-                outClr[2] = 1.;
-            }
-            else {
-                outClr[0] = 1.;
-                outClr[1] = 1.;
-                outClr[2] = 1.;
-            }
-
-            if (intr < 0.25) {
-                outClr[0] += intr * 2.;
-            }
-            else if (intr < 0.5) {
-                outClr[1] += (intr-0.25)/0.25;
-                outClr[0] += 1.;
-            }
-            else if (intr < 1.0) {
-                outClr[2] += (intr-0.5)/0.5;
-                outClr[1] += 1.;
-                outClr[0] += 1.;
-            }
-            else {
-                outClr[2] += 1.;
-                outClr[1] += 1.;
-                outClr[0] += 1.;
-            }
-
-            this.color(Math.min(outClr[0], 1.), Math.min(outClr[1], 1.), Math.min(outClr[2], 1.), 1.);
-
-        }, {
-            graphical: true,
-            constants: {
-                RSIZE: this.RSIZE,
-                PCOUNT: this.PCOUNT,
-            },
-            loopMaxIterations: this.PCOUNT,
-            output: [this.RSIZE, this.RSIZE],
-            paramTypes: {
-                particles: 'NumberTexture',
-                attrs: 'NumberTexture',
-                camCenter: 'Array(3)',
-                camDir: 'Array(3)',
-                camUp: 'Array(3)',
-                camNearWidth: 'Number',
-                camFarWidth: 'Number',
-                camDist: 'Number'
-            }
-        })      
+        })
     ];
 
     /*
@@ -850,7 +724,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
         }
     }, {
         constants: {
-            maxr: 35,
+            maxr: 25,
             seed: Math.random() * 1e6,
             PCOUNT: this.PCOUNT
         },
@@ -871,7 +745,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
         output: [this.PCOUNT * 3]
     });
 
-    this.sDensity = [0.125, 0.25, 0.5, 1.0, 1.5, 2.0]; this.sDensityI = 3;
+    this.sDensity = [0.125, 0.25, 0.5, 1.0, 1.5, 2.0]; this.sDensityI = 5;
     this.sMass = [0.05, 0.1, 0.2, 0.4, 0.8]; this.sMassI = 2;
     this.sIncomp = [1.0, 0.8, 0.6, 0.4, 0.2]; this.sIncompI = 3;
     this.sVisc = [0.05, 0.1, 0.25, 0.35, 0.5, 0.75, 0.95]; this.sViscI = 0;
@@ -930,7 +804,7 @@ window.xSSPS = function(PCOUNT, RSIZE) {
      */ 
     this.reset = () => {
         this.cam = {
-            p: {x: 0, y: 0, z: 20},
+            p: {x: 0, y: 0, z: 17.5},
             dir: {x: 0, y: 0, z: -1},
             up: {x: 0, y: 1, z: 0},
             nearW: 0.0001,
@@ -967,8 +841,29 @@ window.xSSPS = function(PCOUNT, RSIZE) {
     this.velCoppier = makeCoppier(3);
     this.attrCoppier = makeCoppier(6);
 
+    this.readArray = this.gpu.createKernel(function(arr){
+        return arr[this.thread.x];
+    }, {
+        outputToTexture: false,
+        output: [this.PCOUNT * 3]
+    });
+
+    this.hash = [];
+    for (let i=0; i<this.hashLength; i++) {
+        for (let j=0; j<this.hashBinLen; j++) {
+            this.hash.push(0); this.hash.push(0); this.hash.push(0); this.hash.push(-1);
+        }
+    }
+
 };
 
+xSSPS.prototype.hashFn = function(x, y, z) {
+    const max2 = Math.floor(this.bound * 2);
+    const ix = (Math.floor(x/this.hashWSize)) + max2,
+          iy = (Math.floor(y/this.hashWSize)) + max2, 
+          iz = (Math.floor(z/this.hashWSize)) + max2; 
+    return ((ix * 137) + (iy * 197) + (iz * 167)) % this.hashLength;
+};
 
 xSSPS.prototype.updateRender = function(keys, dt) {
 
@@ -979,7 +874,9 @@ xSSPS.prototype.updateRender = function(keys, dt) {
     this.sMassI = this.sMassI % this.sMass.length;
     this.sIncompI = this.sIncompI % this.sIncomp.length;
 
-    for (let i=0; i<5; i++) {
+    const SUBSTEPS = 2;
+
+    for (let i=0; i<SUBSTEPS; i++) {
         // Update velocities via gravity & pressure
         this.data.vel = this.velocityKernel(
             this.data.pos,
@@ -991,22 +888,77 @@ xSSPS.prototype.updateRender = function(keys, dt) {
             this.sVisc[this.sViscI],
             this.sMass[this.sMassI],
             this.sIncomp[this.sIncompI],
-            dt / 5
+            dt / SUBSTEPS
         );
 
         // Update positions
         this.data.pos = this.positionKernel(
             this.posCoppier(this.data.pos),
             this.data.vel,
-            dt / 5
+            dt / SUBSTEPS
         );
+    }
+
+    // Update hash for raytracing
+    // 
+
+    // Clear hash
+    for (let i=0; i<this.hashLength; i++) {
+        const o1 = i * this.hashBinLen * 4;
+        for (let j=0; j<this.hashBinLen; j++) {
+            const o2 = o1 + j * 4;
+            this.hash[o2 + 3] = 0.;
+        }
+    }
+
+    // Insert points into hash
+    const positions = this.readArray(this.data.pos);
+    const hmap = {};
+    for (let i=0; i<this.PCOUNT; i++) {
+        const off = i * 3;
+        const x = positions[off], y = positions[off+1], z = positions[off+2];
+        const r = this.rfScale * 0.707;
+        const ix1 = Math.floor((x - r) / this.hashWSize) - 1,
+              iy1 = Math.floor((y - r) / this.hashWSize) - 1,
+              iz1 = Math.floor((z - r) / this.hashWSize) - 1,
+              ix2 = Math.round((x + r) / this.hashWSize) + 1,
+              iy2 = Math.round((y + r) / this.hashWSize) + 1,
+              iz2 = Math.round((z + r) / this.hashWSize) + 1;
+        for (let ix=ix1; ix<=ix2; ix ++) {
+            for (let iy=iy1; iy<=iy2; iy ++) {
+                for (let iz=iz1; iz<=iz2; iz ++) {
+                    const xc = (ix + 0.5) * this.hashWSize,
+                          yc = (iy + 0.5) * this.hashWSize,
+                          zc = (iz + 0.5) * this.hashWSize;
+                    const dx = xc - x, dy = yc - y, dz = zc - z;
+                    const dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
+                    if (dist <= (r+this.hashWSize)) {
+                        const hkey = this.hashFn(xc, yc, zc);
+                        (hmap[hkey] = hmap[hkey] || []).push({x, y, z, type: i < ((this.PCOUNT-1)-32) ? 1. : 2., dist})
+                    }
+                }
+            }
+        }
+    }
+    const sortFn = (a, b) => (a.dist - b.dist);
+    for (var hkeyStr in hmap) {
+        const hkey = parseInt(hkeyStr);
+        const list = hmap[hkeyStr];
+        list.sort(sortFn);
+        for (let i=0; i<list.length && i<this.hashBinLen; i++) {
+            const P = list[i];
+            const off = hkey * this.hashBinLen * 4 + i * 4;
+            this.hash[off+0] = P.x;
+            this.hash[off+1] = P.y;
+            this.hash[off+2] = P.z;
+            this.hash[off+3] = P.type;
+        }
     }
 
     // Render
     this.renderMode = this.renderMode % this.renderKernel.length;
     this.renderKernel[this.renderMode](
-        this.data.pos,
-        this.data.attr,
+        this.hash,
         [this.cam.p.x, this.cam.p.y, this.cam.p.z],
         [this.cam.dir.x, this.cam.dir.y, this.cam.dir.z],
         [this.cam.up.x, this.cam.up.y, this.cam.up.z],
