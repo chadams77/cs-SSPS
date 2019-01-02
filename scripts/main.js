@@ -57,7 +57,7 @@ SSPS.prototype.updateRender = function(dt) {
     lines.push('[2] - Cycle Particle Viscosity: ' + mkOpt(this.psim.sVisc, this.psim.sViscI));
     lines.push('[3] - Cycle Particle Mass: ' + mkOpt(this.psim.sMass, this.psim.sMassI));
     lines.push('[4] - Cycle Particle Incompressiveness: ' + mkOpt(this.psim.sIncomp, this.psim.sIncompI));
-    lines.push('[ESC] - Reset Particles & Camera')
+    lines.push('[ESC] - Reset Particles & Camera');
 
     const fs = 14;
     const x = this.vpw*0.5 - this.vph*0.5 + 20;
