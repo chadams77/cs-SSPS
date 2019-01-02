@@ -445,12 +445,12 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                     }
 
                     if (fq > 0.175) {
-                        norm[0] /= -fq;
-                        norm[1] /= -fq;
-                        norm[2] /= -fq;
-                        var ref = [0, 0, 0]; ref = reflectWrap(norm, rayDir);
+                        norm[0] /= fq;
+                        norm[1] /= fq;
+                        norm[2] /= fq;
+                        var ref = [0, 0, 0]; ref = refractWrap(norm, rayDir, 1./1.5);
                         var dot = ref[0] * rayDir[0] + ref[1] * rayDir[1] + ref[2] * rayDir[2];
-                        int = (1. - Math.pow(i / this.constants.rayCount, 3.0)) * 0.7;
+                        int = (1. - Math.pow(i / this.constants.rayCount, 1.5));
                         light = Math.min(1., Math.max(dot*dot, 0.)) * int;
                         found = 1.0;
                     }
@@ -564,16 +564,15 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                             }
                         }
                     }
-
                     if (fq > 0.175) {
-                        norm[0] /= -fq;
-                        norm[1] /= -fq;
-                        norm[2] /= -fq;
-                        var ref = [0, 0, 0]; ref = reflectWrap(norm, rayDir);
+                        norm[0] /= fq;
+                        norm[1] /= fq;
+                        norm[2] /= fq;
+                        var ref = [0, 0, 0]; ref = refractWrap(norm, rayDir, 1./1.5);
                         var dot = ref[0] * rayDir[0] + ref[1] * rayDir[1] + ref[2] * rayDir[2];
-                        int = (1. - Math.pow(i / this.constants.rayCount, 3.0)) * 0.7;
+                        int = (1. - Math.pow(i / this.constants.rayCount, 1.5));
                         light = Math.min(1., Math.max(dot*dot, 0.)) * int;
-                        found = 1.0;
+                        found = 1.;
                     }
                 }
             }
@@ -584,7 +583,8 @@ window.xSSPS = function(PCOUNT, RSIZE) {
 
             if (found > 0.) {
                 found = -1.;
-                var nrayDir = [norm[0], norm[1], norm[2]];
+                var nrayDir = [-norm[0], -norm[1], -norm[2]];
+                nrayDir = reflectWrap(nrayDir, rayDir);
                 var nstepR = this.constants.rayDistRef / this.constants.rayCountRef;
                 for (var i=0; i<this.constants.rayCountRef; i++) {
                     if (found < 0.) {
@@ -635,22 +635,22 @@ window.xSSPS = function(PCOUNT, RSIZE) {
                         }
 
                         if (fq > 0.175) {
-                            norm[0] /= -fq;
-                            norm[1] /= -fq;
-                            norm[2] /= -fq;
-                            var ref = [0, 0, 0]; ref = reflectWrap(norm, rayDir);
+                            norm[0] /= fq;
+                            norm[1] /= fq;
+                            norm[2] /= fq;
+                            var ref = [0, 0, 0]; ref = refractWrap(norm, rayDir, 1./1.5);
                             var dot = ref[0] * rayDir[0] + ref[1] * rayDir[1] + ref[2] * rayDir[2];
-                            int = (1. - Math.pow(i / this.constants.rayCountRef, 3.0));
-                            light = Math.min(1., Math.max(dot*dot, 0.)) * int;
+                            int += (1. - Math.pow(i / this.constants.rayCountRef, 1.5));
+                            light += Math.min(1., Math.max(dot*dot, 0.)) * int;
                             found = 1.0;
                         }
                     }
                 }
 
                 if (found > 0.) {
-                    outClr[2] += (int + light) * 0.1;
-                    outClr[1] += (light) * 0.1;
-                    outClr[0] += (light) * 0.1;
+                    outClr[2] += (int + light) * 0.05;
+                    outClr[1] += (light) * 0.05;
+                    outClr[0] += (light) * 0.05;
                 }
             }
 
