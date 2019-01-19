@@ -4,7 +4,7 @@ window.SSPS = function () {
     this.vph = window.innerHeight;
 
     this.psim = new xSSPS(
-        128, // Particle count
+        64, // Particle count
         256 // Render size
     );
 
